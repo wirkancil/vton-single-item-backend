@@ -2,6 +2,25 @@ const express = require('express');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 
+// Import services from services folder
+const {
+  supabase,
+  uploadImage,
+  getAllGarments,
+  getGarmentById,
+  createTryOnSession,
+  updateTryOnSession,
+  getTryOnSessionById,
+  getUserTryOnHistory,
+  deleteTryOnSession,
+  getTryOnSessionByJobId,
+  linkJobToSession
+} = require('./services/supababaseService');
+const {
+  performVirtualTryOn,
+  checkApiHealth
+} = require('./services/pixazoService');
+
 // Create Express app for serverless function
 const app = express();
 
@@ -36,9 +55,15 @@ app.get('/', (req, res) => {
   });
 });
 
-// Health check endpoint with basic status
+// Health check endpoint with services status
 app.get('/api/health', async (req, res) => {
   try {
+    // Check Supabase health
+    const supabaseHealth = await checkApiHealth();
+
+    // Get garments count to verify database access
+    const garmentsCount = await getAllGarments({ limit: 1 });
+
     const healthStatus = {
       success: true,
       status: 'healthy',
@@ -47,13 +72,17 @@ app.get('/api/health', async (req, res) => {
       environment: process.env.NODE_ENV || 'production',
       services: {
         supabase: {
-          status: process.env.SUPABASE_URL ? 'configured' : 'not_configured',
-          message: process.env.SUPABASE_URL ? 'Supabase URL available' : 'Supabase URL not configured'
+          status: supabaseHealth.healthy ? 'healthy' : 'unhealthy',
+          message: supabaseHealth.message
         },
         pixazo: {
           status: process.env.PIXAZO_API_KEY ? 'configured' : 'not_configured',
           message: process.env.PIXAZO_API_KEY ? 'API key available' : 'API key not configured'
         }
+      },
+      database: {
+        garments_available: garmentsCount.length,
+        connection: garmentsCount.length > 0 ? 'connected' : 'no_data'
       }
     };
 
@@ -69,44 +98,28 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// Get all available garments (mock data for now)
+// Get all available garments
 app.get('/api/garments', async (req, res) => {
   try {
     const { category, brand, limit = 50, offset = 0 } = req.query;
 
-    // Mock garments data
-    const mockGarments = [
-      {
-        id: 'garment_001',
-        name: 'Classic White T-Shirt',
-        category: 'top',
-        brand: 'Generic',
-        image_url: 'https://example.com/tshirt.jpg',
-        created_at: new Date().toISOString()
-      },
-      {
-        id: 'garment_002',
-        name: 'Blue Jeans',
-        category: 'bottom',
-        brand: 'Generic',
-        image_url: 'https://example.com/jeans.jpg',
-        created_at: new Date().toISOString()
-      }
-    ];
+    const options = {
+      category,
+      brand,
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    };
 
-    const garments = mockGarments.slice(
-      parseInt(offset),
-      parseInt(offset) + parseInt(limit)
-    );
+    const garments = await getAllGarments(options);
 
     res.status(200).json({
       success: true,
       data: garments,
       total: garments.length,
       pagination: {
-        limit: parseInt(limit),
-        offset: parseInt(offset),
-        hasMore: garments.length === parseInt(limit)
+        limit: options.limit,
+        offset: options.offset,
+        hasMore: garments.length === options.limit
       },
       timestamp: new Date().toISOString()
     });
@@ -120,7 +133,7 @@ app.get('/api/garments', async (req, res) => {
   }
 });
 
-// Create new try-on session (mock implementation)
+// Create new try-on session
 app.post('/api/try-on', async (req, res) => {
   try {
     const { userImage, garmentId, userId } = req.body;
@@ -137,30 +150,77 @@ app.post('/api/try-on', async (req, res) => {
     // Generate session ID
     const sessionId = uuidv4();
 
-    // Mock session creation
-    const sessionData = {
-      id: sessionId,
-      user_id: userId || 'anonymous',
-      garment_id: garmentId,
-      status: 'completed',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      result_image_url: 'https://example.com/result.jpg',
-      completed_at: new Date().toISOString()
-    };
+    // Decode and upload user image
+    let userImageUrl;
+    try {
+      // Handle base64 data URL
+      const base64Data = userImage.replace(/^data:image\/[a-z]+;base64,/, '');
+      const imageBuffer = Buffer.from(base64Data, 'base64');
 
-    res.status(200).json({
-      success: true,
-      message: 'Try-on session created successfully',
-      data: {
-        sessionId,
-        status: 'completed',
-        resultImageUrl: sessionData.result_image_url,
-        garmentId,
-        createdAt: sessionData.created_at,
-        completedAt: sessionData.completed_at
-      }
-    });
+      // Upload to Supabase Storage
+      const imagePath = `try-on-sessions/${sessionId}/user-image-${Date.now()}.jpg`;
+      userImageUrl = await uploadImage(imagePath, imageBuffer, 'image/jpeg');
+
+      console.log(`User image uploaded: ${userImageUrl}`);
+    } catch (uploadError) {
+      console.error('Failed to upload user image:', uploadError);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to process user image',
+        error: uploadError.message
+      });
+    }
+
+    // Create session record in database
+    try {
+      const sessionData = {
+        id: sessionId,
+        user_id: userId || 'anonymous',
+        garment_id: garmentId,
+        original_user_image_url: userImageUrl,
+        status: 'queued',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        metadata: {
+          user_agent: req.get('User-Agent'),
+          ip_address: req.ip,
+          image_size: userImage.length
+        }
+      };
+
+      const session = await createTryOnSession(sessionData);
+
+      // Submit to Pixazo API for processing (in background)
+      processPixazoRequest(sessionId, userImageUrl, garmentId).catch(error => {
+        console.error(`Failed to process Pixazo request for session ${sessionId}:`, error);
+        // Update session status to failed
+        updateTryOnSession(sessionId, {
+          status: 'failed',
+          error_message: error.message,
+          updated_at: new Date().toISOString()
+        });
+      });
+
+      res.status(200).json({
+        success: true,
+        message: 'Try-on session created successfully',
+        data: {
+          sessionId,
+          status: 'queued',
+          userImageUrl,
+          garmentId,
+          estimatedTime: '30-60 seconds',
+          createdAt: session.created_at
+        }
+      });
+    } catch (dbError) {
+      console.error('Failed to create session:', dbError);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to create try-on session',
+        error: dbError.message
+      });
+    }
   } catch (error) {
     console.error('Try-on session creation failed:', error);
     res.status(500).json({
@@ -175,28 +235,32 @@ app.post('/api/try-on', async (req, res) => {
 app.get('/api/try-on/:sessionId/status', async (req, res) => {
   try {
     const { sessionId } = req.params;
+    const { userId } = req.query;
 
-    // Mock session data
-    const sessionData = {
-      id: sessionId,
-      status: 'completed',
-      progress: 100,
-      result_image_url: 'https://example.com/result.jpg',
-      garment_id: 'garment_001',
-      created_at: new Date().toISOString(),
-      completed_at: new Date().toISOString()
-    };
+    // Get session from database
+    const session = await getTryOnSessionById(sessionId, userId || 'anonymous');
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        message: 'Session not found',
+        code: 'SESSION_NOT_FOUND'
+      });
+    }
 
     res.status(200).json({
       success: true,
       data: {
-        sessionId: sessionData.id,
-        status: sessionData.status,
-        progress: sessionData.progress,
-        resultImageUrl: sessionData.result_image_url,
-        garmentId: sessionData.garment_id,
-        createdAt: sessionData.created_at,
-        completedAt: sessionData.completed_at
+        sessionId: session.id,
+        status: session.status,
+        progress: session.progress || 0,
+        userImageUrl: session.original_user_image_url,
+        resultImageUrl: session.result_image_url,
+        garmentId: session.garment_id,
+        createdAt: session.created_at,
+        updatedAt: session.updated_at,
+        completedAt: session.completed_at,
+        errorMessage: session.error_message
       },
       timestamp: new Date().toISOString()
     });
@@ -209,6 +273,199 @@ app.get('/api/try-on/:sessionId/status', async (req, res) => {
     });
   }
 });
+
+// Get user's try-on history
+app.get('/api/try-on/history', async (req, res) => {
+  try {
+    const { userId = 'anonymous', limit = 10, offset = 0, status } = req.query;
+
+    const options = {
+      status,
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    };
+
+    const history = await getUserTryOnHistory(userId, options);
+
+    res.status(200).json({
+      success: true,
+      data: history,
+      total: history.length,
+      pagination: {
+        limit: options.limit,
+        offset: options.offset,
+        hasMore: history.length === options.limit
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Failed to get try-on history:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve try-on history',
+      error: error.message
+    });
+  }
+});
+
+// Delete session
+app.delete('/api/try-on/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { userId = 'anonymous' } = req.query;
+
+    await deleteTryOnSession(sessionId, userId);
+
+    res.status(200).json({
+      success: true,
+      message: 'Session deleted successfully',
+      sessionId,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Failed to delete session:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete session',
+      error: error.message
+    });
+  }
+});
+
+// Webhook for Pixazo API
+app.post('/api/webhooks/pixazo', async (req, res) => {
+  try {
+    const { job_id, status, result_image_url, error_message, session_id } = req.body;
+
+    console.log('Received Pixazo webhook:', { job_id, status, session_id });
+
+    if (!job_id || !status) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid webhook payload'
+      });
+    }
+
+    // Update session status in database
+    const updateData = {
+      status: status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : status,
+      updated_at: new Date().toISOString()
+    };
+
+    if (result_image_url) {
+      updateData.result_image_url = result_image_url;
+    }
+
+    if (error_message) {
+      updateData.error_message = error_message;
+    }
+
+    if (status === 'completed') {
+      updateData.completed_at = new Date().toISOString();
+    }
+
+    // Try to find session by session_id first, then by job_id
+    let targetSessionId = session_id;
+
+    if (!targetSessionId) {
+      // Find session by job_id using the job tracking table
+      try {
+        const session = await getTryOnSessionByJobId(job_id);
+        if (session) {
+          targetSessionId = session.id;
+        }
+      } catch (lookupError) {
+        console.warn('Could not find session by job_id:', job_id);
+      }
+    }
+
+    if (targetSessionId) {
+      await updateTryOnSession(targetSessionId, updateData);
+      console.log(`Updated session ${targetSessionId} with status ${status}`);
+    } else {
+      console.warn('No session found for webhook:', { job_id, session_id });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Webhook processed successfully',
+      processed_at: new Date().toISOString(),
+      session_id: targetSessionId
+    });
+  } catch (error) {
+    console.error('Failed to process webhook:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to process webhook',
+      error: error.message
+    });
+  }
+});
+
+// Background function to process Pixazo request
+async function processPixazoRequest(sessionId, userImageUrl, garmentId) {
+  let jobId = null;
+
+  try {
+    console.log(`Processing Pixazo request for session ${sessionId}`);
+
+    // Get garment details to retrieve garment image URL
+    const garment = await getGarmentById(garmentId);
+    if (!garment) {
+      throw new Error(`Garment not found: ${garmentId}`);
+    }
+
+    // Update session status to processing
+    await updateTryOnSession(sessionId, {
+      status: 'processing',
+      updated_at: new Date().toISOString()
+    });
+
+    // Perform virtual try-on with garment image URL
+    const resultBuffer = await performVirtualTryOn(userImageUrl, garment.image_url, {
+      sessionId,
+      maxWaitTime: 120000, // 2 minutes
+      pollingInterval: 5000 // 5 seconds
+    });
+
+    if (resultBuffer) {
+      // Upload result to Supabase Storage
+      const resultImagePath = `try-on-sessions/${sessionId}/result-${Date.now()}.jpg`;
+      const resultImageUrl = await uploadImage(resultImagePath, resultBuffer, 'image/jpeg');
+
+      // Update session with result
+      await updateTryOnSession(sessionId, {
+        status: 'completed',
+        result_image_url: resultImageUrl,
+        completed_at: new Date().toISOString()
+      });
+
+      console.log(`Pixazo processing completed for session ${sessionId}`);
+    }
+  } catch (error) {
+    console.error(`Pixazo processing failed for session ${sessionId}:`, error);
+
+    // Handle callback processing errors
+    if (error.code === 'CALLBACK_PROCESSING') {
+      // Link job to session for callback tracking
+      jobId = error.jobId;
+      await linkJobToSession(sessionId, jobId, {
+        callback_url: error.callbackUrl,
+        status: 'queued'
+      });
+
+      console.log(`Pixazo job ${jobId} submitted for callback processing`);
+      return; // Don't mark as failed, wait for callback
+    }
+
+    // Update session with error
+    await updateTryOnSession(sessionId, {
+      status: 'failed',
+      error_message: error.message,
+      updated_at: new Date().toISOString()
+    });
+  }
+}
 
 // 404 handler
 app.use((req, res) => {
@@ -223,7 +480,10 @@ app.use((req, res) => {
       'GET /api/health',
       'GET /api/garments',
       'POST /api/try-on',
-      'GET /api/try-on/:sessionId/status'
+      'GET /api/try-on/:sessionId/status',
+      'GET /api/try-on/history',
+      'DELETE /api/try-on/:sessionId',
+      'POST /api/webhooks/pixazo'
     ]
   });
 });

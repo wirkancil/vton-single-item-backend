@@ -8,7 +8,7 @@
     "dev": "nodemon src/server.js",
     "worker": "node src/workers/vtonWorker.js",
     "setup:db": "node scripts/setupDatabase.js",
-    "build": "echo 'Build completed for Vercel deployment'",
+    "build": "mkdir -p dist && cp -r api dist/ && echo 'Build completed for Vercel deployment'",
     "vercel-build": "npm run build"
   },
   "keywords": [

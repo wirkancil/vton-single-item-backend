@@ -496,6 +496,119 @@ async function linkJobToSession(sessionId, jobId, additionalData = {}) {
   }
 }
 
+/**
+ * Create user image record
+ * @param {Object} imageData - User image data
+ * @returns {Promise<Object>} Created image record
+ */
+async function createUserImage(imageData) {
+  try {
+    const { data, error } = await supabase
+      .from('user_images')
+      .insert(imageData)
+      .select()
+      .single();
+
+    if (error) {
+      // If table doesn't exist, log warning but don't fail
+      if (error.code === 'PGRST116' || error.message.includes('relation "user_images" does not exist')) {
+        logger.warn('user_images table not found, skipping database record for user image');
+        return null;
+      }
+      logger.error('Error creating user image record:', error);
+      throw new Error(`Failed to create user image record: ${error.message}`);
+    }
+
+    return data;
+  } catch (error) {
+    logger.error('Create user image error:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get user images by session ID
+ * @param {string} sessionId - Session UUID
+ * @param {string} userId - User UUID for security
+ * @returns {Promise<Array>} Array of user image records
+ */
+async function getUserImagesBySession(sessionId, userId) {
+  try {
+    const { data, error } = await supabase
+      .from('user_images')
+      .select('*')
+      .eq('session_id', sessionId)
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return []; // Table doesn't exist
+      }
+      logger.error('Error fetching user images:', error);
+      throw new Error(`Failed to fetch user images: ${error.message}`);
+    }
+
+    return data || [];
+  } catch (error) {
+    logger.error('Get user images error:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get all user images
+ * @param {string} userId - User UUID
+ * @param {Object} options - Query options
+ * @returns {Promise<Array>} Array of user image records
+ */
+async function getUserImages(userId, options = {}) {
+  try {
+    let query = supabase
+      .from('user_images')
+      .select(`
+        *,
+        try_on_history (
+          id,
+          status,
+          garment_id,
+          garments (
+            id,
+            name,
+            brand,
+            category,
+            image_url
+          )
+        )
+      `)
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    // Add filters if provided
+    if (options.limit) {
+      query = query.limit(options.limit);
+    }
+    if (options.offset) {
+      query = query.range(options.offset, options.offset + (options.limit || 10) - 1);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return []; // Table doesn't exist
+      }
+      logger.error('Error fetching user images:', error);
+      throw new Error(`Failed to fetch user images: ${error.message}`);
+    }
+
+    return data || [];
+  } catch (error) {
+    logger.error('Get user images error:', error);
+    throw error;
+  }
+}
+
 module.exports = {
   supabase,
   supabaseAnon,
@@ -513,5 +626,8 @@ module.exports = {
   updateJobRecord,
   getTryOnSessionByJobId,
   linkJobToSession,
+  createUserImage,
+  getUserImagesBySession,
+  getUserImages,
   logger
 };

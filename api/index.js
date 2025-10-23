@@ -20,9 +20,12 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // Load services with error handling
 let supabaseServices = null;
 let pixazoServices = null;
+let modelServices = null;
+let resultServices = null;
+let storageServices = null;
 
 try {
-  supabaseServices = require('./services/supababaseService');
+  supabaseServices = require('./services/supabaseService');
   console.log('✅ Supabase services loaded successfully');
 } catch (error) {
   console.error('❌ Failed to load Supabase services:', error.message);
@@ -33,6 +36,27 @@ try {
   console.log('✅ Pixazo services loaded successfully');
 } catch (error) {
   console.error('❌ Failed to load Pixazo services:', error.message);
+}
+
+try {
+  modelServices = require('./services/modelService');
+  console.log('✅ Model services loaded successfully');
+} catch (error) {
+  console.error('❌ Failed to load Model services:', error.message);
+}
+
+try {
+  resultServices = require('./services/resultService');
+  console.log('✅ Result services loaded successfully');
+} catch (error) {
+  console.error('❌ Failed to load Result services:', error.message);
+}
+
+try {
+  storageServices = require('./services/storageService');
+  console.log('✅ Storage services loaded successfully');
+} catch (error) {
+  console.error('❌ Failed to load Storage services:', error.message);
 }
 
 // Real garment data from database setup
@@ -64,7 +88,10 @@ app.get('/', (req, res) => {
       tryOn: '/api/try-on',
       garments: '/api/garments',
       health: '/api/health',
-      webhook: '/api/webhooks/pixazo'
+      webhook: '/api/webhooks/pixazo',
+      models: '/api/models',
+      results: '/api/results',
+      storage: '/api/storage'
     }
   });
 });
@@ -173,24 +200,41 @@ app.post('/api/try-on', async (req, res) => {
 
     // Decode and upload user image
     let userImageUrl;
+    let imageBuffer;
+    let originalFileName = 'model.png';
+    let fileSize = 0;
+    let imagePath = '';
+
     try {
       // Handle base64 data URL
       const base64Data = userImage.replace(/^data:image\/[a-z]+;base64,/, '');
-      const imageBuffer = Buffer.from(base64Data, 'base64');
+      imageBuffer = Buffer.from(base64Data, 'base64');
+      fileSize = imageBuffer.length;
+
+      // Extract original filename if available from data URL
+      if (userImage.includes('filename=')) {
+        const filenameMatch = userImage.match(/filename=([^;]+)/);
+        if (filenameMatch) {
+          originalFileName = filenameMatch[1];
+        }
+      }
 
       // Upload to Supabase Storage if services available
       if (supabaseServices && supabaseServices.uploadImage) {
-        const imagePath = `vton-sessions/${sessionId}/user-image-${Date.now()}.jpg`;
+        imagePath = `vton-sessions/${sessionId}/user-image-${Date.now()}.jpg`;
         userImageUrl = await supabaseServices.uploadImage(imagePath, imageBuffer, 'image/jpeg');
         console.log(`✅ User image uploaded to Supabase: ${userImageUrl}`);
       } else {
         // Fallback to mock URL
+        imagePath = `vton-sessions/${sessionId}/user-image-${Date.now()}.jpg`;
         userImageUrl = `https://mock-storage.vton.ai/user-images/${sessionId}.jpg`;
         console.log(`⚠️  Using mock user image URL: ${userImageUrl}`);
       }
     } catch (uploadError) {
       console.error('Failed to upload user image:', uploadError);
       userImageUrl = `https://mock-storage.vton.ai/user-images/${sessionId}.jpg`;
+      imagePath = `vton-sessions/${sessionId}/user-image-${Date.now()}.jpg`;
+      fileSize = userImage.length;
     }
 
     // Get garment details
@@ -225,6 +269,26 @@ app.post('/api/try-on', async (req, res) => {
       try {
         await supabaseServices.createTryOnSession(sessionData);
         console.log(`✅ Session saved to database`);
+
+        // Also save user image metadata to database
+        if (supabaseServices.createUserImage) {
+          const imageData = {
+            user_id: userId || 'anonymous',
+            session_id: sessionId,
+            original_filename: originalFileName,
+            file_path: imagePath,
+            public_url: userImageUrl,
+            file_size: fileSize,
+            content_type: 'image/jpeg'
+          };
+
+          const imageRecord = await supabaseServices.createUserImage(imageData);
+          if (imageRecord) {
+            console.log(`✅ User image metadata saved to database: ${imageRecord.id}`);
+          } else {
+            console.log(`⚠️  User image table not available, skipping metadata storage`);
+          }
+        }
       } catch (dbError) {
         console.warn('⚠️  Failed to save session to database:', dbError.message);
       }
@@ -486,6 +550,440 @@ app.post('/api/webhooks/pixazo', async (req, res) => {
   }
 });
 
+// =============================================
+// MODEL MANAGEMENT ROUTES
+// =============================================
+
+// Create face model (requires file upload)
+app.post('/api/models/faces', async (req, res) => {
+  try {
+    const modelController = require('./controllers/modelController');
+    const { authenticateToken } = require('./middleware/authMiddleware');
+
+    // Mock authentication for now - replace with actual middleware
+    req.user = { id: req.body.userId || 'anonymous' };
+
+    // Simulate file upload handling
+    if (req.body.userImage) {
+      const base64Data = req.body.userImage.replace(/^data:image\/[a-z]+;base64,/, '');
+      req.file = { buffer: Buffer.from(base64Data, 'base64'), mimetype: 'image/jpeg' };
+    }
+
+    return await modelController.createFaceModel(req, res);
+  } catch (error) {
+    console.error('Create face model error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create face model',
+      error: error.message
+    });
+  }
+});
+
+// Get user face models
+app.get('/api/models/faces', async (req, res) => {
+  try {
+    const modelController = require('./controllers/modelController');
+
+    // Mock authentication
+    req.user = { id: req.query.userId || 'anonymous' };
+
+    return await modelController.getUserFaceModels(req, res);
+  } catch (error) {
+    console.error('Get face models error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get face models',
+      error: error.message
+    });
+  }
+});
+
+// Update face model
+app.put('/api/models/faces/:modelId', async (req, res) => {
+  try {
+    const modelController = require('./controllers/modelController');
+
+    // Mock authentication
+    req.user = { id: req.body.userId || 'anonymous' };
+
+    return await modelController.updateFaceModel(req, res);
+  } catch (error) {
+    console.error('Update face model error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update face model',
+      error: error.message
+    });
+  }
+});
+
+// Delete face model
+app.delete('/api/models/faces/:modelId', async (req, res) => {
+  try {
+    const modelController = require('./controllers/modelController');
+
+    // Mock authentication
+    req.user = { id: req.query.userId || 'anonymous' };
+
+    return await modelController.deleteFaceModel(req, res);
+  } catch (error) {
+    console.error('Delete face model error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete face model',
+      error: error.message
+    });
+  }
+});
+
+// Create size profile
+app.post('/api/models/size-profiles', async (req, res) => {
+  try {
+    const modelController = require('./controllers/modelController');
+
+    // Mock authentication
+    req.user = { id: req.body.userId || 'anonymous' };
+
+    return await modelController.createSizeProfile(req, res);
+  } catch (error) {
+    console.error('Create size profile error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create size profile',
+      error: error.message
+    });
+  }
+});
+
+// Get user size profiles
+app.get('/api/models/size-profiles', async (req, res) => {
+  try {
+    const modelController = require('./controllers/modelController');
+
+    // Mock authentication
+    req.user = { id: req.query.userId || 'anonymous' };
+
+    return await modelController.getUserSizeProfiles(req, res);
+  } catch (error) {
+    console.error('Get size profiles error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get size profiles',
+      error: error.message
+    });
+  }
+});
+
+// Update size profile
+app.put('/api/models/size-profiles/:profileId', async (req, res) => {
+  try {
+    const modelController = require('./controllers/modelController');
+
+    // Mock authentication
+    req.user = { id: req.body.userId || 'anonymous' };
+
+    return await modelController.updateSizeProfile(req, res);
+  } catch (error) {
+    console.error('Update size profile error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update size profile',
+      error: error.message
+    });
+  }
+});
+
+// Delete size profile
+app.delete('/api/models/size-profiles/:profileId', async (req, res) => {
+  try {
+    const modelController = require('./controllers/modelController');
+
+    // Mock authentication
+    req.user = { id: req.query.userId || 'anonymous' };
+
+    return await modelController.deleteSizeProfile(req, res);
+  } catch (error) {
+    console.error('Delete size profile error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete size profile',
+      error: error.message
+    });
+  }
+});
+
+// Get user model analytics
+app.get('/api/models/analytics', async (req, res) => {
+  try {
+    const modelController = require('./controllers/modelController');
+
+    // Mock authentication
+    req.user = { id: req.query.userId || 'anonymous' };
+
+    return await modelController.getUserModelAnalytics(req, res);
+  } catch (error) {
+    console.error('Get model analytics error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get model analytics',
+      error: error.message
+    });
+  }
+});
+
+// =============================================
+// RESULT MANAGEMENT ROUTES
+// =============================================
+
+// Get user result gallery
+app.get('/api/results/gallery', async (req, res) => {
+  try {
+    const resultController = require('./controllers/resultController');
+
+    // Mock authentication
+    req.user = { id: req.query.userId || 'anonymous' };
+
+    return await resultController.getUserResultGallery(req, res);
+  } catch (error) {
+    console.error('Get result gallery error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get result gallery',
+      error: error.message
+    });
+  }
+});
+
+// Get shared result (public access)
+app.get('/api/results/shared/:shareToken', async (req, res) => {
+  try {
+    const resultController = require('./controllers/resultController');
+
+    return await resultController.getResultByShareToken(req, res);
+  } catch (error) {
+    console.error('Get shared result error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get shared result',
+      error: error.message
+    });
+  }
+});
+
+// Get specific result details
+app.get('/api/results/:sessionId', async (req, res) => {
+  try {
+    const resultController = require('./controllers/resultController');
+
+    // Mock authentication
+    req.user = { id: req.query.userId || 'anonymous' };
+
+    return await resultController.getResultDetails(req, res);
+  } catch (error) {
+    console.error('Get result details error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get result details',
+      error: error.message
+    });
+  }
+});
+
+// Update result analytics
+app.put('/api/results/:sessionId', async (req, res) => {
+  try {
+    const resultController = require('./controllers/resultController');
+
+    // Mock authentication
+    req.user = { id: req.body.userId || 'anonymous' };
+
+    return await resultController.updateResultAnalytics(req, res);
+  } catch (error) {
+    console.error('Update result analytics error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update result analytics',
+      error: error.message
+    });
+  }
+});
+
+// Toggle favorite status
+app.put('/api/results/:sessionId/favorite', async (req, res) => {
+  try {
+    const resultController = require('./controllers/resultController');
+
+    // Mock authentication
+    req.user = { id: req.body.userId || 'anonymous' };
+
+    return await resultController.toggleFavorite(req, res);
+  } catch (error) {
+    console.error('Toggle favorite error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to toggle favorite status',
+      error: error.message
+    });
+  }
+});
+
+// Create share for result
+app.post('/api/results/:sessionId/share', async (req, res) => {
+  try {
+    const resultController = require('./controllers/resultController');
+
+    // Mock authentication
+    req.user = { id: req.body.userId || 'anonymous' };
+
+    return await resultController.createShare(req, res);
+  } catch (error) {
+    console.error('Create share error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create share',
+      error: error.message
+    });
+  }
+});
+
+// Get user result analytics
+app.get('/api/results/analytics', async (req, res) => {
+  try {
+    const resultController = require('./controllers/resultController');
+
+    // Mock authentication
+    req.user = { id: req.query.userId || 'anonymous' };
+
+    return await resultController.getUserResultAnalytics(req, res);
+  } catch (error) {
+    console.error('Get result analytics error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get result analytics',
+      error: error.message
+    });
+  }
+});
+
+// Delete result
+app.delete('/api/results/:sessionId', async (req, res) => {
+  try {
+    const resultController = require('./controllers/resultController');
+
+    // Mock authentication
+    req.user = { id: req.query.userId || 'anonymous' };
+
+    return await resultController.deleteResultAnalytics(req, res);
+  } catch (error) {
+    console.error('Delete result error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete result',
+      error: error.message
+    });
+  }
+});
+
+// =============================================
+// STORAGE MANAGEMENT ROUTES
+// =============================================
+
+// Get user storage usage
+app.get('/api/storage/usage', async (req, res) => {
+  try {
+    const storageController = require('./controllers/storageController');
+
+    // Mock authentication
+    req.user = { id: req.query.userId || 'anonymous' };
+
+    return await storageController.getUserStorageUsage(req, res);
+  } catch (error) {
+    console.error('Get storage usage error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get storage usage',
+      error: error.message
+    });
+  }
+});
+
+// Cleanup old files
+app.post('/api/storage/cleanup', async (req, res) => {
+  try {
+    const storageController = require('./controllers/storageController');
+
+    // Mock authentication
+    req.user = { id: req.body.userId || 'anonymous' };
+
+    return await storageController.cleanupOldFiles(req, res);
+  } catch (error) {
+    console.error('Cleanup storage error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to cleanup storage',
+      error: error.message
+    });
+  }
+});
+
+// Optimize storage
+app.post('/api/storage/optimize', async (req, res) => {
+  try {
+    const storageController = require('./controllers/storageController');
+
+    // Mock authentication
+    req.user = { id: req.body.userId || 'anonymous' };
+
+    return await storageController.optimizeStorage(req, res);
+  } catch (error) {
+    console.error('Optimize storage error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to optimize storage',
+      error: error.message
+    });
+  }
+});
+
+// Get global storage stats (admin only)
+app.get('/api/storage/global-stats', async (req, res) => {
+  try {
+    const storageController = require('./controllers/storageController');
+
+    // Mock admin authentication
+    req.user = { id: 'admin', email: 'admin@admin.com' };
+
+    return await storageController.getGlobalStorageStats(req, res);
+  } catch (error) {
+    console.error('Get global storage stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get global storage stats',
+      error: error.message
+    });
+  }
+});
+
+// Get bucket info (admin only)
+app.get('/api/storage/buckets', async (req, res) => {
+  try {
+    const storageController = require('./controllers/storageController');
+
+    // Mock admin authentication
+    req.user = { id: 'admin', email: 'admin@admin.com' };
+
+    return await storageController.getBucketInfo(req, res);
+  } catch (error) {
+    console.error('Get bucket info error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get bucket info',
+      error: error.message
+    });
+  }
+});
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({
@@ -500,7 +998,35 @@ app.use((req, res) => {
       'GET /api/garments',
       'POST /api/try-on',
       'GET /api/try-on/:sessionId/status',
-      'POST /api/webhooks/pixazo'
+      'POST /api/webhooks/pixazo',
+      '',
+      '=== MODEL MANAGEMENT ===',
+      'POST /api/models/faces',
+      'GET /api/models/faces',
+      'PUT /api/models/faces/:modelId',
+      'DELETE /api/models/faces/:modelId',
+      'POST /api/models/size-profiles',
+      'GET /api/models/size-profiles',
+      'PUT /api/models/size-profiles/:profileId',
+      'DELETE /api/models/size-profiles/:profileId',
+      'GET /api/models/analytics',
+      '',
+      '=== RESULT MANAGEMENT ===',
+      'GET /api/results/gallery',
+      'GET /api/results/shared/:shareToken',
+      'GET /api/results/:sessionId',
+      'PUT /api/results/:sessionId',
+      'PUT /api/results/:sessionId/favorite',
+      'POST /api/results/:sessionId/share',
+      'GET /api/results/analytics',
+      'DELETE /api/results/:sessionId',
+      '',
+      '=== STORAGE MANAGEMENT ===',
+      'GET /api/storage/usage',
+      'POST /api/storage/cleanup',
+      'POST /api/storage/optimize',
+      'GET /api/storage/global-stats (admin)',
+      'GET /api/storage/buckets (admin)'
     ]
   });
 });

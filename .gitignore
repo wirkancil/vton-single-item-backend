@@ -1,0 +1,146 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# nyc test coverage
+.nyc_output
+
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# dotenv environment variables file
+.env
+.env.test
+
+# parcel-bundler cache (https://parceljs.org/)
+.cache
+.parcel-cache
+
+# next.js build output
+.next
+
+# nuxt.js build output
+.nuxt
+
+# vuepress build output
+.vuepress/dist
+
+# Serverless directories
+.serverless
+
+# FuseBox cache
+.fusebox/
+
+# DynamoDB Local files
+.dynamodb/
+
+# TernJS port file
+.tern-port
+
+# Stores VSCode versions used for testing VSCode extensions
+.vscode-test
+
+# Logs
+logs
+*.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build directories
+dist/
+build/
+out/
+
+# Temporary files
+tmp/
+temp/
+
+# Database files
+*.sqlite
+*.db
+
+# Redis dump
+dump.rdb
+
+# PM2 files
+ecosystem.config.js
+
+# Docker
+.dockerignore
+
+# Mac files
+.DS_Store
+
+# Vercel
+.vercel/
+
+# Test files and results
+test-*.js
+check-result.js
+create-*.js
+download-result.js
+simple-server.js
+vton-callback-server.js
+test-results-summary.md
+hasil-test-lengkap.md
+test-vercel-setup.js
+DEMO_*.png
+hasil-*.png
+vton-*.png
+virtual-try-on-result.png
+VTON_RESULT_*.png
+GARMENT_CHANGE_RESULT_*.png
+garment-change-final.png
+
+# Sample images (keep model.png and germent.png as they're needed for testing)
+# model.png
+# germent.png
+
+# Demo files
+model-with-garment-demo.png

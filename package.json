@@ -1,0 +1,47 @@
+{
+  "name": "vton-backend-api",
+  "version": "1.0.0",
+  "description": "Optimized Backend API untuk Single Item Virtual Try-On (VTON)",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "worker": "node src/workers/vtonWorker.js",
+    "setup:db": "node scripts/setupDatabase.js",
+    "build": "echo 'Build completed for Vercel deployment'",
+    "vercel-build": "npm run build"
+  },
+  "keywords": [
+    "vton",
+    "virtual-try-on",
+    "ai",
+    "fashion",
+    "api"
+  ],
+  "author": "VTON Team",
+  "license": "MIT",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.38.4",
+    "axios": "^1.6.2",
+    "bullmq": "^4.15.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "helmet": "^7.1.0",
+    "ioredis": "^5.3.2",
+    "joi": "^17.11.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "pg": "^8.16.3",
+    "redis": "^5.8.3",
+    "uuid": "^9.0.1",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

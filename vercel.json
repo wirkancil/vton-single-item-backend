@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "name": "vton-backend-api",
+  "builds": [
+    {
+      "src": "src/api/**/*.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/src/api/$1.js"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/src/api/index.js"
+    }
+  ],
+  "functions": {
+    "src/api/**/*.js": {
+      "maxDuration": 120
+    }
+  },
+  "env": {
+    "NODE_ENV": "production"
+  },
+  "framework": null,
+  "domains": ["vton.ai-agentic.tech"]
+}

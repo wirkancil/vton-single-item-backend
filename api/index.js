@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 
-// Import services from src folder
+// Import services from services folder
 const {
   supabase,
   uploadImage,
@@ -15,11 +15,11 @@ const {
   deleteTryOnSession,
   getTryOnSessionByJobId,
   linkJobToSession
-} = require('../src/services/supababaseService');
+} = require('./services/supababaseService');
 const {
   performVirtualTryOn,
   checkApiHealth
-} = require('../src/services/pixazoService');
+} = require('./services/pixazoService');
 
 // Create Express app for serverless function
 const app = express();

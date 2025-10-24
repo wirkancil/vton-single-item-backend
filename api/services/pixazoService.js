@@ -1,8 +1,8 @@
 const axios = require('axios');
 const { logger } = require('./supabaseService');
 
-// Pixazo API configuration
-const PIXAZO_API_URL = process.env.PIXAZO_API_URL || 'https://api.pixazo.com/v1/kolors-vton';
+// Pixazo API configuration - Updated to use the correct endpoint
+const PIXAZO_API_URL = process.env.PIXAZO_API_URL || 'https://gateway.pixazo.ai/virtual-tryon/v1/r-vton';
 const PIXAZO_API_KEY = process.env.PIXAZO_API_KEY;
 
 if (!PIXAZO_API_KEY) {
@@ -141,20 +141,9 @@ async function performVirtualTryOn(userImageUrl, garmentImageUrl, options = {}) 
       const jobId = response.data.id;
       logger.info(`Pixazo job submitted successfully. Job ID: ${jobId}`);
 
-      // Since this API doesn't have polling endpoints, use a simple delay simulation
-      logger.info(`Simulating AI processing for job ${jobId}...`);
-
-      // Wait for a simulated processing time
-      await new Promise(resolve => setTimeout(resolve, 5000)); // 5 second simulation
-
-      // For now, create a mock result since we can't poll the actual API
-      // In production, you would implement webhook callbacks or a different polling strategy
-      logger.warn(`No polling endpoints available. Using mock result for job ${jobId}.`);
-
-      // Create a simple mock result buffer (small PNG image)
-      const mockResultBuffer = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==', 'base64');
-
-      return mockResultBuffer;
+      // Implement real polling for Pixazo API result
+      const result = await pollPixazoResult(jobId);
+      return result;
 
     } else if (response.data.result_image_url) {
       // If API returns image URL directly
@@ -253,6 +242,114 @@ async function performVirtualTryOn(userImageUrl, garmentImageUrl, options = {}) 
     }
 
     throw new Error(errorMessage);
+  }
+}
+
+/**
+ * Poll Pixazo API for job result
+ * @param {string} jobId - The job ID from Pixazo API
+ * @param {number} maxWaitTime - Maximum wait time in milliseconds (default: 5 minutes)
+ * @param {number} pollInterval - Polling interval in milliseconds (default: 10 seconds)
+ * @returns {Promise<Buffer>} Result image buffer
+ */
+async function pollPixazoResult(jobId, maxWaitTime = 300000, pollInterval = 10000) {
+  try {
+    logger.info(`Starting to poll Pixazo job ${jobId} for result...`);
+
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < maxWaitTime) {
+      try {
+        // Check job status
+        const statusResponse = await pixazoClient.get(`/${jobId}`);
+
+        if (!statusResponse.data) {
+          throw new Error('No status data received from Pixazo API');
+        }
+
+        const statusData = statusResponse.data;
+        logger.info(`Pixazo job ${jobId} status:`, {
+          status: statusData.status,
+          progress: statusData.progress || 'N/A'
+        });
+
+        // Check if job is completed
+        if (statusData.status === 'completed' || statusData.status === 'success') {
+          logger.info(`Pixazo job ${jobId} completed successfully!`);
+
+          // Handle different response formats
+          if (statusData.output_img_url || statusData.result_image_url) {
+            const resultImageUrl = statusData.output_img_url || statusData.result_image_url;
+
+            logger.info(`Downloading result from: ${resultImageUrl}`);
+
+            // Download the result image
+            const imageResponse = await axios.get(resultImageUrl, {
+              responseType: 'arraybuffer',
+              timeout: 60000,
+              headers: {
+                'User-Agent': 'VTON-Backend/1.0'
+              }
+            });
+
+            const resultBuffer = Buffer.from(imageResponse.data);
+            logger.info(`Successfully downloaded result image (${resultBuffer.length} bytes)`);
+
+            return resultBuffer;
+
+          } else if (statusData.result_image_base64) {
+            // Handle base64 result
+            const base64Data = statusData.result_image_base64;
+            const resultBuffer = Buffer.from(base64Data, 'base64');
+
+            logger.info(`Successfully decoded result image (${resultBuffer.length} bytes)`);
+            return resultBuffer;
+
+          } else {
+            throw new Error('Job completed but no result image found in response');
+          }
+
+        } else if (statusData.status === 'failed' || statusData.status === 'error') {
+          const errorMessage = statusData.error || statusData.message || 'Unknown error';
+          throw new Error(`Pixazo job ${jobId} failed: ${errorMessage}`);
+        }
+
+        // Job is still processing, wait before next poll
+        logger.info(`Job ${jobId} still processing... waiting ${pollInterval/1000}s`);
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+
+      } catch (error) {
+        if (error.response?.status === 404) {
+          logger.warn(`Job ${jobId} not found yet, will retry...`);
+          await new Promise(resolve => setTimeout(resolve, pollInterval));
+          continue;
+        }
+
+        logger.error(`Error polling job ${jobId}:`, {
+          message: error.message,
+          status: error.response?.status,
+          data: error.response?.data
+        });
+
+        // Continue polling for non-critical errors
+        if (error.response?.status >= 500 || error.code === 'ECONNABORTED') {
+          logger.info(`Retrying job ${jobId} after error...`);
+          await new Promise(resolve => setTimeout(resolve, pollInterval));
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    throw new Error(`Timeout waiting for Pixazo job ${jobId} to complete after ${maxWaitTime/1000} seconds`);
+
+  } catch (error) {
+    logger.error(`Failed to poll Pixazo job ${jobId}:`, {
+      message: error.message,
+      stack: error.stack
+    });
+    throw error;
   }
 }
 
@@ -515,6 +612,7 @@ async function estimateProcessingTime(userImageUrl, garmentImageUrl) {
 
 module.exports = {
   performVirtualTryOn,
+  pollPixazoResult,  // Added new polling function
   getApiUsage,
   checkApiHealth,
   getSupportedFormats,

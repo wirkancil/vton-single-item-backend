@@ -2,7 +2,6 @@ const { v4: uuidv4 } = require('uuid');
 const Joi = require('joi');
 const {
   supabase,
-  uploadImage,
   getGarmentById,
   createTryOnSession,
   updateTryOnSession,
@@ -12,6 +11,7 @@ const {
   logger
 } = require('../services/supabaseService');
 const { addTryOnJob } = require('../services/queueService');
+const { uploadImageToSupabase } = require('../services/enhancedStorageService');
 
 // Validation schemas
 const createTryOnSchema = Joi.object({
@@ -104,22 +104,24 @@ exports.createTryOnSession = async (req, res) => {
     // Generate unique session ID
     const sessionId = uuidv4();
 
-    // Upload user image to Supabase Storage
-    const userImagePath = `user-uploads/${userId}/${sessionId}_original.jpg`;
-    let originalUserImageUrl;
+    // Upload user image using enhanced storage service
+    let uploadResult;
 
     try {
-      originalUserImageUrl = await uploadImage(
-        userImagePath,
+      const fileName = `${sessionId}_user-image.${userImageFile.mimetype.split('/')[1] || 'jpg'}`;
+      uploadResult = await uploadImageToSupabase(
         userImageFile.buffer,
-        userImageFile.mimetype
+        fileName,
+        userImageFile.mimetype,
+        'vton-sessions'
       );
     } catch (error) {
       logger.error('Failed to upload user image:', error);
       return res.status(500).json({
         success: false,
         message: 'Failed to upload user image',
-        code: 'UPLOAD_FAILED'
+        code: 'UPLOAD_FAILED',
+        details: error.message
       });
     }
 
@@ -130,7 +132,7 @@ exports.createTryOnSession = async (req, res) => {
         id: sessionId,
         user_id: userId,
         garment_id: garmentId,
-        original_user_image_url: originalUserImageUrl,
+        original_user_image_url: uploadResult.url,
         status: 'queued'
       });
     } catch (error) {
@@ -138,9 +140,8 @@ exports.createTryOnSession = async (req, res) => {
 
       // Clean up uploaded image if session creation failed
       try {
-        await supabase.storage
-          .from('vton-assets')
-          .remove([userImagePath]);
+        const { deleteImage } = require('../services/enhancedStorageService');
+        await deleteImage(uploadResult.path);
       } catch (cleanupError) {
         logger.error('Failed to clean up uploaded image:', cleanupError);
       }

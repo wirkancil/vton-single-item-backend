@@ -569,6 +569,149 @@ app.post('/api/try-on', upload.fields([
   }
 });
 
+// Manual trigger status check and polling (if processing too long)
+app.post('/api/try-on/:sessionId/check-status', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    
+    console.error('[VTON-Check] Manual status check triggered for session:', sessionId);
+    
+    // Get session from database
+    const supabaseServices = getSupabaseServices();
+    if (!supabaseServices) {
+      return res.status(503).json({
+        success: false,
+        message: 'Supabase service not available',
+        code: 'SERVICE_UNAVAILABLE'
+      });
+    }
+    
+    const session = await supabaseServices.getTryOnSessionById(sessionId, 'anonymous');
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        message: 'Session not found',
+        code: 'SESSION_NOT_FOUND'
+      });
+    }
+    
+    // If still processing and session has job_id, try to check status from Pixazo
+    if (session.status === 'processing') {
+      // Get job ID from database
+      try {
+        const { data: jobRecord } = await supabaseServices.supabase
+          .from('pixazo_jobs')
+          .select('job_id')
+          .eq('session_id', sessionId)
+          .single();
+        
+        if (jobRecord && jobRecord.job_id) {
+          const pixazoServices = getPixazoServices();
+          if (pixazoServices && pixazoServices.checkJobStatus) {
+            console.error('[VTON-Check] Checking Pixazo job status:', jobRecord.job_id);
+            
+            try {
+              const jobStatus = await pixazoServices.checkJobStatus(jobRecord.job_id);
+              console.error('[VTON-Check] Pixazo job status:', jobStatus);
+              
+              // If job is completed, get result and update session
+              if (jobStatus.status === 'completed' || jobStatus.status === 'success') {
+                if (jobStatus.result_image_url || jobStatus.result_url) {
+                  const resultUrl = jobStatus.result_image_url || jobStatus.result_url;
+                  
+                  // Download and upload to Supabase
+                  const axios = require('axios');
+                  const imageResponse = await axios.get(resultUrl, {
+                    responseType: 'arraybuffer',
+                    timeout: 60000
+                  });
+                  const resultBuffer = Buffer.from(imageResponse.data);
+                  
+                  const resultImagePath = `vton-sessions/${sessionId}/result-${Date.now()}.jpg`;
+                  const finalResultUrl = await supabaseServices.uploadImage(resultImagePath, resultBuffer, 'image/jpeg');
+                  
+                  // Update session
+                  await supabaseServices.updateTryOnSession(sessionId, {
+                    status: 'completed',
+                    result_image_url: finalResultUrl,
+                    completed_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                  });
+                  
+                  return res.status(200).json({
+                    success: true,
+                    message: 'Job completed and result downloaded',
+                    data: {
+                      sessionId,
+                      status: 'completed',
+                      resultImageUrl: finalResultUrl
+                    }
+                  });
+                }
+              } else if (jobStatus.status === 'failed' || jobStatus.status === 'error') {
+                await supabaseServices.updateTryOnSession(sessionId, {
+                  status: 'failed',
+                  error_message: jobStatus.error_message || jobStatus.message || 'Job failed',
+                  updated_at: new Date().toISOString()
+                });
+                
+                return res.status(200).json({
+                  success: false,
+                  message: 'Job failed',
+                  data: {
+                    sessionId,
+                    status: 'failed',
+                    errorMessage: jobStatus.error_message || jobStatus.message
+                  }
+                });
+              } else {
+                return res.status(200).json({
+                  success: true,
+                  message: 'Job still processing',
+                  data: {
+                    sessionId,
+                    status: jobStatus.status || 'processing',
+                    pixazoStatus: jobStatus
+                  }
+                });
+              }
+            } catch (statusError) {
+              console.error('[VTON-Check] Error checking Pixazo status:', statusError);
+              return res.status(500).json({
+                success: false,
+                message: 'Failed to check Pixazo job status',
+                error: statusError.message
+              });
+            }
+          }
+        }
+      } catch (jobError) {
+        console.error('[VTON-Check] Error getting job ID:', jobError);
+        // Continue to return current session status
+      }
+    }
+    
+    // Return current session status
+    return res.status(200).json({
+      success: true,
+      message: 'Status check completed',
+      data: {
+        sessionId: session.id,
+        status: session.status,
+        resultImageUrl: session.result_image_url,
+        updatedAt: session.updated_at
+      }
+    });
+  } catch (error) {
+    console.error('[VTON-Check] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to check status',
+      error: error.message
+    });
+  }
+});
+
 // Get session status
 app.get('/api/try-on/:sessionId/status', async (req, res) => {
   try {

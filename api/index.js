@@ -292,10 +292,23 @@ app.post('/api/try-on', upload.single('userImage'), async (req, res, next) => {
       }
     }
 
+    // Handle user_id for anonymous users
+    // Note: Database has FK constraint to auth.users, so we need a valid UUID
+    // Since we're using service role key, we can insert with any UUID
+    // But RLS policies might block if user doesn't exist in auth.users
+    // Solution: Service role bypasses RLS, so we can use generated UUID
+    let finalUserId = userId;
+    if (!finalUserId || finalUserId === 'anonymous') {
+      // Generate UUID for anonymous session
+      // Service role key will bypass RLS, so FK constraint check is less strict
+      finalUserId = uuidv4();
+      console.log(`⚠️  Generated UUID for anonymous user: ${finalUserId}`);
+    }
+
     // Create session record (only fields that exist in database schema)
     const sessionData = {
       id: sessionId,
-      user_id: userId || 'anonymous',
+      user_id: finalUserId,
       garment_id: garmentId,
       original_user_image_url: userImageUrl,
       status: 'processing',

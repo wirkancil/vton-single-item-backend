@@ -595,99 +595,134 @@ app.post('/api/try-on/:sessionId/check-status', async (req, res) => {
       });
     }
     
-    // If still processing and session has job_id, try to check status from Pixazo
+    // If still processing, try to check status from Pixazo
     if (session.status === 'processing') {
       // Get job ID from database
+      let jobId = null;
       try {
-        const { data: jobRecord } = await supabaseServices.supabase
+        const { data: jobRecord, error: jobError } = await supabaseServices.supabase
           .from('pixazo_jobs')
           .select('job_id')
           .eq('session_id', sessionId)
-          .single();
+          .maybeSingle();
         
         if (jobRecord && jobRecord.job_id) {
-          const pixazoServices = getPixazoServices();
-          if (pixazoServices && pixazoServices.checkJobStatus) {
-            console.error('[VTON-Check] Checking Pixazo job status:', jobRecord.job_id);
+          jobId = jobRecord.job_id;
+        } else if (jobError && jobError.code !== 'PGRST116') {
+          console.error('[VTON-Check] Error getting job ID:', jobError);
+        }
+      } catch (jobError) {
+        console.error('[VTON-Check] Error querying job table:', jobError);
+      }
+      
+      // If we have job_id, try to poll for result
+      if (jobId) {
+        const pixazoServices = getPixazoServices();
+        if (pixazoServices && pixazoServices.pollPixazoResult) {
+          console.error('[VTON-Check] Starting quick poll for job:', jobId);
+          
+          try {
+            // Quick poll: 30 seconds max, check every 3 seconds
+            const resultBuffer = await pixazoServices.pollPixazoResult(jobId, 30000, 3000);
             
-            try {
-              const jobStatus = await pixazoServices.checkJobStatus(jobRecord.job_id);
-              console.error('[VTON-Check] Pixazo job status:', jobStatus);
+            if (resultBuffer) {
+              // Upload result to Supabase
+              const resultImagePath = `vton-sessions/${sessionId}/result-${Date.now()}.jpg`;
+              const finalResultUrl = await supabaseServices.uploadImage(resultImagePath, resultBuffer, 'image/jpeg');
               
-              // If job is completed, get result and update session
-              if (jobStatus.status === 'completed' || jobStatus.status === 'success') {
-                if (jobStatus.result_image_url || jobStatus.result_url) {
-                  const resultUrl = jobStatus.result_image_url || jobStatus.result_url;
-                  
-                  // Download and upload to Supabase
-                  const axios = require('axios');
-                  const imageResponse = await axios.get(resultUrl, {
-                    responseType: 'arraybuffer',
-                    timeout: 60000
-                  });
-                  const resultBuffer = Buffer.from(imageResponse.data);
-                  
-                  const resultImagePath = `vton-sessions/${sessionId}/result-${Date.now()}.jpg`;
-                  const finalResultUrl = await supabaseServices.uploadImage(resultImagePath, resultBuffer, 'image/jpeg');
-                  
-                  // Update session
-                  await supabaseServices.updateTryOnSession(sessionId, {
-                    status: 'completed',
-                    result_image_url: finalResultUrl,
-                    completed_at: new Date().toISOString(),
-                    updated_at: new Date().toISOString()
-                  });
-                  
-                  return res.status(200).json({
-                    success: true,
-                    message: 'Job completed and result downloaded',
-                    data: {
-                      sessionId,
-                      status: 'completed',
-                      resultImageUrl: finalResultUrl
-                    }
-                  });
+              // Update session
+              await supabaseServices.updateTryOnSession(sessionId, {
+                status: 'completed',
+                result_image_url: finalResultUrl,
+                completed_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+              });
+              
+              return res.status(200).json({
+                success: true,
+                message: 'Job completed! Result downloaded via polling',
+                data: {
+                  sessionId,
+                  status: 'completed',
+                  resultImageUrl: finalResultUrl
                 }
-              } else if (jobStatus.status === 'failed' || jobStatus.status === 'error') {
+              });
+            }
+          } catch (pollError) {
+            console.error('[VTON-Check] Polling timeout or error (job may still processing):', pollError.message);
+            // Continue to return current status - not an error, just means job still processing
+          }
+        } else if (pixazoServices && pixazoServices.checkJobStatus) {
+          // Fallback: just check status without polling
+          try {
+            const jobStatus = await pixazoServices.checkJobStatus(jobId);
+            console.error('[VTON-Check] Pixazo job status:', jobStatus);
+            
+            if (jobStatus.status === 'completed' || jobStatus.status === 'success') {
+              if (jobStatus.output_img_url || jobStatus.result_image_url || jobStatus.result_url) {
+                const resultUrl = jobStatus.output_img_url || jobStatus.result_image_url || jobStatus.result_url;
+                
+                // Download and upload to Supabase
+                const axios = require('axios');
+                const imageResponse = await axios.get(resultUrl, {
+                  responseType: 'arraybuffer',
+                  timeout: 60000
+                });
+                const resultBuffer = Buffer.from(imageResponse.data);
+                
+                const resultImagePath = `vton-sessions/${sessionId}/result-${Date.now()}.jpg`;
+                const finalResultUrl = await supabaseServices.uploadImage(resultImagePath, resultBuffer, 'image/jpeg');
+                
+                // Update session
                 await supabaseServices.updateTryOnSession(sessionId, {
-                  status: 'failed',
-                  error_message: jobStatus.error_message || jobStatus.message || 'Job failed',
+                  status: 'completed',
+                  result_image_url: finalResultUrl,
+                  completed_at: new Date().toISOString(),
                   updated_at: new Date().toISOString()
                 });
                 
                 return res.status(200).json({
-                  success: false,
-                  message: 'Job failed',
-                  data: {
-                    sessionId,
-                    status: 'failed',
-                    errorMessage: jobStatus.error_message || jobStatus.message
-                  }
-                });
-              } else {
-                return res.status(200).json({
                   success: true,
-                  message: 'Job still processing',
+                  message: 'Job completed and result downloaded',
                   data: {
                     sessionId,
-                    status: jobStatus.status || 'processing',
-                    pixazoStatus: jobStatus
+                    status: 'completed',
+                    resultImageUrl: finalResultUrl
                   }
                 });
               }
-            } catch (statusError) {
-              console.error('[VTON-Check] Error checking Pixazo status:', statusError);
-              return res.status(500).json({
+            } else if (jobStatus.status === 'failed' || jobStatus.status === 'error') {
+              await supabaseServices.updateTryOnSession(sessionId, {
+                status: 'failed',
+                error_message: jobStatus.error_message || jobStatus.message || 'Job failed',
+                updated_at: new Date().toISOString()
+              });
+              
+              return res.status(200).json({
                 success: false,
-                message: 'Failed to check Pixazo job status',
-                error: statusError.message
+                message: 'Job failed',
+                data: {
+                  sessionId,
+                  status: 'failed',
+                  errorMessage: jobStatus.error_message || jobStatus.message
+                }
+              });
+            } else {
+              return res.status(200).json({
+                success: true,
+                message: 'Job still processing',
+                data: {
+                  sessionId,
+                  status: jobStatus.status || 'processing',
+                  pixazoStatus: jobStatus
+                }
               });
             }
+          } catch (statusError) {
+            console.error('[VTON-Check] Error checking Pixazo status:', statusError.message);
+            // Continue to return current session status
           }
         }
-      } catch (jobError) {
-        console.error('[VTON-Check] Error getting job ID:', jobError);
-        // Continue to return current session status
       }
     }
     

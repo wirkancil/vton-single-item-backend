@@ -560,10 +560,11 @@ async function processPixazoRequest(sessionId, userImageUrl, garmentImageUrl) {
     }
 
     // Perform virtual try-on
+    // Increase timeout to 10 minutes (600000ms) for slow processing
     const resultBuffer = await pixazoServices.performVirtualTryOn(userImageUrl, garmentImageUrl, {
       sessionId,
-      maxWaitTime: 120000, // 2 minutes
-      pollingInterval: 5000 // 5 seconds
+      maxWaitTime: 600000, // 10 minutes - increased for slow AI processing
+      pollingInterval: 10000 // 10 seconds - reasonable polling interval
     });
 
     if (resultBuffer) {

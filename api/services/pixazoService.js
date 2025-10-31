@@ -142,7 +142,11 @@ async function performVirtualTryOn(userImageUrl, garmentImageUrl, options = {}) 
       logger.info(`Pixazo job submitted successfully. Job ID: ${jobId}`);
 
       // Implement real polling for Pixazo API result
-      const result = await pollPixazoResult(jobId);
+      // Pass options.maxWaitTime and options.pollingInterval from caller
+      const maxWaitTime = options?.maxWaitTime || 300000; // Default 5 minutes
+      const pollInterval = options?.pollingInterval || 10000; // Default 10 seconds
+      logger.info(`Polling with maxWaitTime: ${maxWaitTime}ms, pollInterval: ${pollInterval}ms`);
+      const result = await pollPixazoResult(jobId, maxWaitTime, pollInterval);
       return result;
 
     } else if (response.data.result_image_url) {

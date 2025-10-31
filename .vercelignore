@@ -1,0 +1,30 @@
+# Ignore build artifacts
+dist/
+build/
+.next/
+out/
+
+# Ignore test files
+*.test.js
+*.spec.js
+test-*.js
+*-test.py
+*-test.js
+
+# Ignore documentation (tidak diperlukan untuk deployment)
+*.md
+!README.md
+
+# Ignore local development files
+.env.local
+.env.development
+.env.test
+
+# Ignore sample images (tidak diperlukan di production)
+*.png
+*.jpg
+*.jpeg
+result.png
+model.png
+germent.png
+

@@ -4,12 +4,22 @@ build/
 .next/
 out/
 
+# Ignore unused API files (hanya api/index.js yang digunakan sebagai entry point)
+api/index-broken.js
+api/index-mock.js
+api/try-on.js
+api/webhooks.js
+api/controllers/
+api/services/
+src/
+
 # Ignore test files
 *.test.js
 *.spec.js
 test-*.js
 *-test.py
 *-test.js
+test-*.js
 
 # Ignore documentation (tidak diperlukan untuk deployment)
 *.md

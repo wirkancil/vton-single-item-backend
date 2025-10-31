@@ -295,6 +295,9 @@ app.post('/api/try-on', upload.fields([
     if (uploadedGarmentFile) {
       // Upload garment image if provided
       try {
+        if (!supabaseServices || !supabaseServices.uploadImage) {
+          throw new Error('Supabase services not available');
+        }
         const garmentImagePath = `vton-sessions/${sessionId}/garment-image-${Date.now()}.jpg`;
         garmentImageUrl = await supabaseServices.uploadImage(garmentImagePath, uploadedGarmentFile.buffer, 'image/jpeg');
         console.error(`[VTON] Garment image uploaded to Supabase: ${garmentImageUrl}`);

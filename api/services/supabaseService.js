@@ -33,14 +33,18 @@ if (!hasSupabaseConfig) {
 
 // Create Supabase client with service role key (for admin operations)
 // Only create clients if config is available
-const supabase = hasSupabaseConfig 
-  ? createClient(supabaseUrl, supabaseServiceKey)
-  : null;
+let supabase = null;
+let supabaseAnon = null;
 
-// Create Supabase client with anon key (for public operations)
-const supabaseAnon = hasSupabaseConfig
-  ? createClient(supabaseUrl, process.env.SUPABASE_ANON_KEY)
-  : null;
+try {
+  if (hasSupabaseConfig && supabaseUrl && supabaseServiceKey) {
+    supabase = createClient(supabaseUrl, supabaseServiceKey);
+    supabaseAnon = createClient(supabaseUrl, process.env.SUPABASE_ANON_KEY || '');
+  }
+} catch (clientError) {
+  logger.error('Failed to create Supabase clients:', clientError.message);
+  // Clients remain null - will be checked in functions
+}
 
 /**
  * Upload image to Supabase Storage

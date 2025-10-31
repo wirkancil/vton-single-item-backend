@@ -1,5 +1,13 @@
 const axios = require('axios');
-const { logger } = require('./supabaseService');
+
+// Safely require logger to avoid module loading errors
+let logger;
+try {
+  const supabaseService = require('./supabaseService');
+  logger = supabaseService.logger || console;
+} catch (error) {
+  logger = console; // Fallback to console if supabaseService not available
+}
 
 // Pixazo API configuration - Updated to use the correct endpoint
 const PIXAZO_API_URL = process.env.PIXAZO_API_URL || 'https://gateway.pixazo.ai/virtual-tryon/v1/r-vton';

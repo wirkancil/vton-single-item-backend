@@ -36,53 +36,36 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Load services with error handling
-let supabaseServices = null;
-let pixazoServices = null;
-let modelServices = null;
-let resultServices = null;
-let storageServices = null;
-
-try {
-  supabaseServices = require('./services/supabaseService');
-  console.log('✅ Supabase services loaded successfully');
-  console.error('[VTON] Supabase services loaded:', {
-    hasUploadImage: !!supabaseServices?.uploadImage,
-    hasSupabase: !!supabaseServices?.supabase,
-    keys: Object.keys(supabaseServices || {})
-  });
-} catch (error) {
-  console.error('❌ Failed to load Supabase services:', error.message);
-  console.error('[VTON] Error stack:', error.stack);
+// Lazy loading for services - load on demand to avoid module loading errors
+function getSupabaseServices() {
+  if (!getSupabaseServices._cache) {
+    try {
+      getSupabaseServices._cache = require('./services/supabaseService');
+      console.error('[VTON] Supabase services loaded successfully');
+    } catch (error) {
+      console.error('[VTON] ❌ Failed to load Supabase services:', error.message);
+      getSupabaseServices._cache = null;
+    }
+  }
+  return getSupabaseServices._cache;
 }
 
-try {
-  pixazoServices = require('./services/pixazoService');
-  console.log('✅ Pixazo services loaded successfully');
-} catch (error) {
-  console.error('❌ Failed to load Pixazo services:', error.message);
+function getPixazoServices() {
+  if (!getPixazoServices._cache) {
+    try {
+      getPixazoServices._cache = require('./services/pixazoService');
+      console.error('[VTON] Pixazo services loaded successfully');
+    } catch (error) {
+      console.error('[VTON] ❌ Failed to load Pixazo services:', error.message);
+      getPixazoServices._cache = null;
+    }
+  }
+  return getPixazoServices._cache;
 }
 
-try {
-  modelServices = require('./services/modelService');
-  console.log('✅ Model services loaded successfully');
-} catch (error) {
-  console.error('❌ Failed to load Model services:', error.message);
-}
-
-try {
-  resultServices = require('./services/resultService');
-  console.log('✅ Result services loaded successfully');
-} catch (error) {
-  console.error('❌ Failed to load Result services:', error.message);
-}
-
-try {
-  storageServices = require('./services/storageService');
-  console.log('✅ Storage services loaded successfully');
-} catch (error) {
-  console.error('❌ Failed to load Storage services:', error.message);
-}
+// For backward compatibility
+let supabaseServices = getSupabaseServices();
+let pixazoServices = getPixazoServices();
 
 // Real garment data from database setup
 const REAL_GARMENT_DATA = {
@@ -105,9 +88,9 @@ app.get('/', (req, res) => {
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'production',
     vercel: true,
-    services_loaded: {
-      supabase: supabaseServices ? 'loaded' : 'failed',
-      pixazo: pixazoServices ? 'loaded' : 'failed'
+        services_loaded: {
+      supabase: getSupabaseServices() ? 'loaded' : 'failed',
+      pixazo: getPixazoServices() ? 'loaded' : 'failed'
     },
     endpoints: {
       tryOn: '/api/try-on',
@@ -134,12 +117,12 @@ app.get('/api/health', async (req, res) => {
         supabase: {
           status: process.env.SUPABASE_URL ? 'configured' : 'not_configured',
           message: process.env.SUPABASE_URL ? 'Supabase URL available' : 'Supabase URL not configured',
-          loaded: supabaseServices ? 'yes' : 'no'
+          loaded: getSupabaseServices() ? 'yes' : 'no'
         },
         pixazo: {
           status: process.env.PIXAZO_API_KEY ? 'configured' : 'not_configured',
           message: process.env.PIXAZO_API_KEY ? 'API key available' : 'API key not configured',
-          loaded: pixazoServices ? 'yes' : 'no'
+          loaded: getPixazoServices() ? 'yes' : 'no'
         }
       },
       database: {
@@ -272,7 +255,8 @@ app.post('/api/try-on', upload.fields([
         console.error(`[VTON] Received base64 image: ${originalFileName} (${fileSize} bytes)`);
       }
 
-      // Upload to Supabase Storage if services available
+      // Upload to Supabase Storage if services available (lazy load)
+      const supabaseServices = getSupabaseServices();
       if (supabaseServices && supabaseServices.uploadImage) {
         imagePath = `vton-sessions/${sessionId}/user-image-${Date.now()}.jpg`;
         userImageUrl = await supabaseServices.uploadImage(imagePath, imageBuffer, 'image/jpeg');
@@ -301,6 +285,7 @@ app.post('/api/try-on', upload.fields([
     if (uploadedGarmentFile) {
       // Upload garment image if provided
       try {
+        const supabaseServices = getSupabaseServices();
         if (!supabaseServices || !supabaseServices.uploadImage) {
           throw new Error('Supabase services not available');
         }

@@ -373,10 +373,54 @@ app.post('/api/try-on', upload.single('userImage'), async (req, res, next) => {
     }
 
     // Start real AI processing if Pixazo available
-    if (pixazoServices && pixazoServices.performVirtualTryOn) {
-      console.log('🤖 Starting real AI processing...');
+    if (pixazoServices && pixazoServices.submitVirtualTryOnJob) {
+      console.log('🤖 Submitting Pixazo job (async with webhook)...');
 
-      // Process in background
+      // Submit job SYNCHRONOUSLY before sending response (critical for serverless)
+      // This ensures job is actually submitted before function terminates
+      let jobInfo = null;
+      try {
+        jobInfo = await processPixazoRequest(sessionId, userImageUrl, garment.image_url);
+        console.log(`✅ Job submitted successfully: ${jobInfo?.jobId || 'N/A'}`);
+      } catch (submitError) {
+        console.error(`❌ Job submission failed for session ${sessionId}:`, submitError);
+        // Update session with error
+        if (supabaseServices && supabaseServices.updateTryOnSession) {
+          await supabaseServices.updateTryOnSession(sessionId, {
+            status: 'failed',
+            error_message: submitError.message,
+            updated_at: new Date().toISOString()
+          });
+        }
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to submit processing job',
+          error: submitError.message,
+          code: 'JOB_SUBMISSION_FAILED'
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Try-on session created successfully. Processing started.',
+        data: {
+          sessionId,
+          status: 'processing',
+          userImageUrl,
+          garmentId,
+          garmentName: garment.name,
+          estimatedTime: '30-60 seconds',
+          createdAt: sessionData.created_at,
+          processing: 'async_webhook',
+          jobId: jobInfo?.jobId,
+          note: 'Results will be available via webhook callback'
+        }
+      });
+    } else if (pixazoServices && pixazoServices.performVirtualTryOn) {
+      // Fallback: old polling method (if new method not available)
+      console.log('🤖 Starting real AI processing (legacy polling)...');
+
+      // Process in background (this might not work in serverless)
       processPixazoRequest(sessionId, userImageUrl, garment.image_url).catch(error => {
         console.error(`❌ AI processing failed for session ${sessionId}:`, error);
 
@@ -403,7 +447,7 @@ app.post('/api/try-on', upload.single('userImage'), async (req, res, next) => {
           garmentName: garment.name,
           estimatedTime: '30-60 seconds',
           createdAt: sessionData.created_at,
-          processing: 'real_ai'
+          processing: 'real_ai_polling'
         }
       });
     } else {

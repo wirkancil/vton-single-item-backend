@@ -38,13 +38,20 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Lazy loading for services - load on demand to avoid module loading errors
 function getSupabaseServices() {
-  if (!getSupabaseServices._cache) {
+  if (!getSupabaseServices._cache && getSupabaseServices._cache !== null) {
     try {
+      const path = require('path');
+      const fs = require('fs');
+      const servicePath = path.join(__dirname, 'services', 'supabaseService.js');
+      console.error('[VTON] Attempting to load supabaseService from:', servicePath);
+      console.error('[VTON] File exists:', fs.existsSync(servicePath));
       getSupabaseServices._cache = require('./services/supabaseService');
-      console.error('[VTON] Supabase services loaded successfully');
+      console.error('[VTON] ✅ Supabase services loaded successfully');
+      console.error('[VTON] Available functions:', Object.keys(getSupabaseServices._cache || {}).slice(0, 5));
     } catch (error) {
       console.error('[VTON] ❌ Failed to load Supabase services:', error.message);
-      getSupabaseServices._cache = null;
+      console.error('[VTON] Error stack:', error.stack);
+      getSupabaseServices._cache = null; // Mark as failed so we don't retry
     }
   }
   return getSupabaseServices._cache;
@@ -286,8 +293,18 @@ app.post('/api/try-on', upload.fields([
       // Upload garment image if provided
       try {
         const supabaseServices = getSupabaseServices();
+        console.error('[VTON] Checking supabaseServices:', {
+          exists: !!supabaseServices,
+          hasUploadImage: !!supabaseServices?.uploadImage,
+          type: typeof supabaseServices,
+          keys: supabaseServices ? Object.keys(supabaseServices).slice(0, 5) : []
+        });
         if (!supabaseServices || !supabaseServices.uploadImage) {
-          throw new Error('Supabase services not available');
+          const errorMsg = !supabaseServices 
+            ? 'Supabase services module failed to load (check logs for details)' 
+            : 'uploadImage function not available in supabaseServices';
+          console.error('[VTON] ❌', errorMsg);
+          throw new Error(errorMsg);
         }
         const garmentImagePath = `vton-sessions/${sessionId}/garment-image-${Date.now()}.jpg`;
         garmentImageUrl = await supabaseServices.uploadImage(garmentImagePath, uploadedGarmentFile.buffer, 'image/jpeg');

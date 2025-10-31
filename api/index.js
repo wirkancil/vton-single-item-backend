@@ -294,14 +294,13 @@ app.post('/api/try-on', upload.single('userImage'), async (req, res, next) => {
 
     // Handle user_id for anonymous users
     // Database requires user_id to be valid UUID that exists in auth.users (FK constraint)
-    // Solution: Create or use a system anonymous user
-    // For now, we'll generate a UUID and catch FK error to provide helpful message
+    // After running fix-anonymous-user.sql, user_id can be NULL for anonymous
     let finalUserId = userId;
     if (!finalUserId || finalUserId === 'anonymous') {
-      // Try to insert with generated UUID
-      // If FK constraint fails, we'll catch and provide migration instructions
-      finalUserId = uuidv4();
-      console.log(`⚠️  Generated UUID for anonymous user: ${finalUserId}`);
+      // After migration: can use NULL
+      // Before migration: will fail with FK error (handled below)
+      finalUserId = null;
+      console.log(`⚠️  Using NULL for anonymous user_id (requires SQL migration if FK constraint exists)`);
     }
 
     // Create session record (only fields that exist in database schema)

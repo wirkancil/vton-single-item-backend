@@ -1,9 +1,11 @@
 -- Fix Anonymous User Support for try_on_history table
 -- Run this in Supabase SQL Editor
+-- IMPORTANT: This removes FK constraint to allow anonymous users
 
 -- Option 1: Make user_id nullable and remove FK constraint (RECOMMENDED)
 -- This allows anonymous sessions without requiring auth.users entry
 
+-- Drop the foreign key constraint
 ALTER TABLE IF EXISTS try_on_history 
   DROP CONSTRAINT IF EXISTS try_on_history_user_id_fkey;
 

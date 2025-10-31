@@ -420,16 +420,24 @@ app.post('/api/try-on', upload.fields([
 
     // Start real AI processing if Pixazo available
     if (pixazoServices && pixazoServices.submitVirtualTryOnJob) {
-      console.log('🤖 Submitting Pixazo job (async with webhook)...');
+      // Use explicit logging for Vercel visibility
+      const logMessage = `[VTON] Submitting Pixazo job (async with webhook) for session ${sessionId}`;
+      console.log(logMessage);
+      console.error('[VTON]', logMessage); // Also log to stderr for better visibility
 
       // Submit job SYNCHRONOUSLY before sending response (critical for serverless)
       // This ensures job is actually submitted before function terminates
       let jobInfo = null;
       try {
+        console.log(`[VTON] Processing request - sessionId: ${sessionId}, userImageUrl: ${userImageUrl?.substring(0, 50)}..., garmentImageUrl: ${garmentImageUrl?.substring(0, 50)}...`);
         jobInfo = await processPixazoRequest(sessionId, userImageUrl, garmentImageUrl);
-        console.log(`✅ Job submitted successfully: ${jobInfo?.jobId || 'N/A'}`);
+        const successMsg = `[VTON] Job submitted successfully - sessionId: ${sessionId}, jobId: ${jobInfo?.jobId || 'N/A'}`;
+        console.log(successMsg);
+        console.error('[VTON]', successMsg); // Also log to stderr
       } catch (submitError) {
-        console.error(`❌ Job submission failed for session ${sessionId}:`, submitError);
+        const errorMsg = `[VTON-ERROR] Job submission failed for session ${sessionId}: ${submitError.message}`;
+        console.error(errorMsg);
+        console.error('[VTON-ERROR]', submitError.stack); // Log stack trace
         // Update session with error
         if (supabaseServices && supabaseServices.updateTryOnSession) {
           await supabaseServices.updateTryOnSession(sessionId, {
@@ -639,7 +647,10 @@ app.get('/api/try-on/:sessionId/status', async (req, res) => {
 // Background AI processing function - Submit job and let webhook handle completion
 async function processPixazoRequest(sessionId, userImageUrl, garmentImageUrl) {
   try {
-    console.log(`🤖 Submitting Pixazo job for session ${sessionId}`);
+    const logPrefix = '[VTON-Process]';
+    const startMsg = `${logPrefix} Submitting Pixazo job for session ${sessionId}`;
+    console.log(startMsg);
+    console.error(logPrefix, startMsg); // Also log to stderr for Vercel visibility
 
     // Update session status to processing
     if (supabaseServices && supabaseServices.updateTryOnSession) {
@@ -647,17 +658,23 @@ async function processPixazoRequest(sessionId, userImageUrl, garmentImageUrl) {
         status: 'processing',
         updated_at: new Date().toISOString()
       });
+      console.log(`${logPrefix} Session status updated to processing`);
     }
 
     // Submit job to Pixazo (async mode - webhook will handle completion)
     // This is better for serverless environments where background tasks may not complete
     if (pixazoServices && pixazoServices.submitVirtualTryOnJob) {
+      console.log(`${logPrefix} Calling Pixazo submitVirtualTryOnJob...`);
       const jobInfo = await pixazoServices.submitVirtualTryOnJob(userImageUrl, garmentImageUrl, {
         sessionId
       });
 
-      console.log(`✅ Pixazo job submitted: ${jobInfo.jobId} for session ${sessionId}`);
-      console.log(`📞 Webhook URL: ${jobInfo.callbackUrl}`);
+      const successMsg = `${logPrefix} Pixazo job submitted: ${jobInfo.jobId} for session ${sessionId}`;
+      const webhookMsg = `${logPrefix} Webhook URL: ${jobInfo.callbackUrl}`;
+      console.log(successMsg);
+      console.log(webhookMsg);
+      console.error(logPrefix, successMsg); // Also log to stderr
+      console.error(logPrefix, webhookMsg); // Also log to stderr
 
       // Store job_id in session metadata for tracking (optional - webhook uses session_id from URL)
       // For now, webhook will use session_id from callback URL query parameter
@@ -687,7 +704,9 @@ async function processPixazoRequest(sessionId, userImageUrl, garmentImageUrl) {
       }
     }
   } catch (error) {
-    console.error(`❌ Failed to submit Pixazo job for session ${sessionId}:`, error);
+    const errorMsg = `[VTON-ERROR] Failed to submit Pixazo job for session ${sessionId}: ${error.message}`;
+    console.error(errorMsg);
+    console.error('[VTON-ERROR]', error.stack); // Log stack trace
 
     // Update session with error
     if (supabaseServices && supabaseServices.updateTryOnSession) {

@@ -23,18 +23,24 @@ const logger = winston.createLogger({
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-if (!supabaseUrl || !supabaseServiceKey) {
-  throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required');
+// Don't throw error at module load time - check in functions instead
+// This allows the module to be loaded even if env vars are temporarily unavailable
+const hasSupabaseConfig = !!(supabaseUrl && supabaseServiceKey);
+
+if (!hasSupabaseConfig) {
+  logger.warn('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY not configured. Some functions will not work.');
 }
 
 // Create Supabase client with service role key (for admin operations)
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+// Only create clients if config is available
+const supabase = hasSupabaseConfig 
+  ? createClient(supabaseUrl, supabaseServiceKey)
+  : null;
 
 // Create Supabase client with anon key (for public operations)
-const supabaseAnon = createClient(
-  supabaseUrl,
-  process.env.SUPABASE_ANON_KEY
-);
+const supabaseAnon = hasSupabaseConfig
+  ? createClient(supabaseUrl, process.env.SUPABASE_ANON_KEY)
+  : null;
 
 /**
  * Upload image to Supabase Storage
@@ -45,6 +51,10 @@ const supabaseAnon = createClient(
  */
 async function uploadImage(path, fileBuffer, contentType) {
   try {
+    if (!hasSupabaseConfig || !supabase) {
+      throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required');
+    }
+    
     logger.info(`Uploading image to path: ${path}`);
 
     const { data, error } = await supabase.storage

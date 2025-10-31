@@ -233,7 +233,7 @@ app.post('/api/try-on', upload.fields([
 
     // Generate session ID
     const sessionId = uuidv4();
-    console.log(`🎭 Creating try-on session ${sessionId} for garment ${garmentId}`);
+    console.error(`[VTON] Creating try-on session ${sessionId} for garment ${garmentId || 'uploaded-image'}`);
 
     // Decode and upload user image
     let userImageUrl;
@@ -249,7 +249,7 @@ app.post('/api/try-on', upload.fields([
         imageBuffer = uploadedFile.buffer;
         fileSize = uploadedFile.size;
         originalFileName = uploadedFile.originalname || 'model.png';
-        console.log(`✅ Received file upload: ${originalFileName} (${fileSize} bytes)`);
+        console.error(`[VTON] Received file upload: ${originalFileName} (${fileSize} bytes)`);
       } else if (userImageBase64) {
         // Base64 JSON format
         const base64Data = userImageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
@@ -263,14 +263,14 @@ app.post('/api/try-on', upload.fields([
             originalFileName = filenameMatch[1];
           }
         }
-        console.log(`✅ Received base64 image: ${originalFileName} (${fileSize} bytes)`);
+        console.error(`[VTON] Received base64 image: ${originalFileName} (${fileSize} bytes)`);
       }
 
       // Upload to Supabase Storage if services available
       if (supabaseServices && supabaseServices.uploadImage) {
         imagePath = `vton-sessions/${sessionId}/user-image-${Date.now()}.jpg`;
         userImageUrl = await supabaseServices.uploadImage(imagePath, imageBuffer, 'image/jpeg');
-        console.log(`✅ User image uploaded to Supabase: ${userImageUrl}`);
+        console.error(`[VTON] User image uploaded to Supabase: ${userImageUrl}`);
       } else {
         // Fallback to mock URL
         imagePath = `vton-sessions/${sessionId}/user-image-${Date.now()}.jpg`;
@@ -297,7 +297,7 @@ app.post('/api/try-on', upload.fields([
       try {
         const garmentImagePath = `vton-sessions/${sessionId}/garment-image-${Date.now()}.jpg`;
         garmentImageUrl = await supabaseServices.uploadImage(garmentImagePath, uploadedGarmentFile.buffer, 'image/jpeg');
-        console.log(`✅ Garment image uploaded to Supabase: ${garmentImageUrl}`);
+        console.error(`[VTON] Garment image uploaded to Supabase: ${garmentImageUrl}`);
       } catch (garmentUploadError) {
         console.error('Failed to upload garment image:', garmentUploadError);
         return res.status(500).json({
@@ -313,7 +313,7 @@ app.post('/api/try-on', upload.fields([
         try {
           garment = await supabaseServices.getGarmentById(garmentId);
           garmentImageUrl = garment.image_url;
-          console.log(`✅ Got garment from database: ${garment.name}`);
+          console.error(`[VTON] Got garment from database: ${garment.name}`);
         } catch (dbError) {
           console.warn('⚠️  Using fallback garment data:', dbError.message);
           garmentImageUrl = REAL_GARMENT_DATA.image_url;
@@ -372,7 +372,7 @@ app.post('/api/try-on', upload.fields([
 
     try {
       await supabaseServices.createTryOnSession(sessionData);
-      console.log(`✅ Session saved to database`);
+      console.error(`[VTON] Session saved to database - sessionId: ${sessionId}`);
 
       // Also save user image metadata to database (optional)
       if (supabaseServices.createUserImage) {

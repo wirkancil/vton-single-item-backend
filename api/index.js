@@ -1,9 +1,28 @@
 const express = require('express');
 const cors = require('cors');
+const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
 
 // Create Express app for serverless function
 const app = express();
+
+// Configure multer for file uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: parseInt(process.env.MAX_FILE_SIZE) || 10 * 1024 * 1024, // 10MB
+    files: 1
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedMimeTypes = process.env.ALLOWED_MIME_TYPES?.split(',') ||
+      ['image/jpeg', 'image/jpg', 'image/png'];
+    if (allowedMimeTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`Invalid file type. Allowed types: ${allowedMimeTypes.join(', ')}`), false);
+    }
+  }
+});
 
 // CORS configuration
 app.use(cors({
@@ -181,16 +200,27 @@ app.get('/api/garments', async (req, res) => {
 });
 
 // Create new try-on session with real processing
-app.post('/api/try-on', async (req, res) => {
+app.post('/api/try-on', upload.single('userImage'), async (req, res, next) => {
   try {
-    const { userImage, garmentId, userId } = req.body;
+    const { garmentId, userId } = req.body;
+    const uploadedFile = req.file;
 
     // Validate required fields
-    if (!userImage || !garmentId) {
+    if (!garmentId) {
       return res.status(400).json({
         success: false,
-        message: 'Missing required fields: userImage and garmentId',
+        message: 'Missing required field: garmentId',
         code: 'MISSING_FIELDS'
+      });
+    }
+
+    // Check if image was provided (either as file upload or base64)
+    const userImageBase64 = req.body.userImage; // For base64 JSON format
+    if (!uploadedFile && !userImageBase64) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required field: userImage (file upload or base64)',
+        code: 'MISSING_USER_IMAGE'
       });
     }
 
@@ -206,17 +236,27 @@ app.post('/api/try-on', async (req, res) => {
     let imagePath = '';
 
     try {
-      // Handle base64 data URL
-      const base64Data = userImage.replace(/^data:image\/[a-z]+;base64,/, '');
-      imageBuffer = Buffer.from(base64Data, 'base64');
-      fileSize = imageBuffer.length;
+      // Handle both file upload and base64 formats
+      if (uploadedFile) {
+        // File upload via FormData
+        imageBuffer = uploadedFile.buffer;
+        fileSize = uploadedFile.size;
+        originalFileName = uploadedFile.originalname || 'model.png';
+        console.log(`✅ Received file upload: ${originalFileName} (${fileSize} bytes)`);
+      } else if (userImageBase64) {
+        // Base64 JSON format
+        const base64Data = userImageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+        imageBuffer = Buffer.from(base64Data, 'base64');
+        fileSize = imageBuffer.length;
 
-      // Extract original filename if available from data URL
-      if (userImage.includes('filename=')) {
-        const filenameMatch = userImage.match(/filename=([^;]+)/);
-        if (filenameMatch) {
-          originalFileName = filenameMatch[1];
+        // Extract original filename if available from data URL
+        if (userImageBase64.includes('filename=')) {
+          const filenameMatch = userImageBase64.match(/filename=([^;]+)/);
+          if (filenameMatch) {
+            originalFileName = filenameMatch[1];
+          }
         }
+        console.log(`✅ Received base64 image: ${originalFileName} (${fileSize} bytes)`);
       }
 
       // Upload to Supabase Storage if services available
@@ -231,10 +271,14 @@ app.post('/api/try-on', async (req, res) => {
         console.log(`⚠️  Using mock user image URL: ${userImageUrl}`);
       }
     } catch (uploadError) {
-      console.error('Failed to upload user image:', uploadError);
-      userImageUrl = `https://mock-storage.vton.ai/user-images/${sessionId}.jpg`;
-      imagePath = `vton-sessions/${sessionId}/user-image-${Date.now()}.jpg`;
-      fileSize = userImage.length;
+      console.error('Failed to process user image:', uploadError);
+      // Return proper error response instead of continuing
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to process user image',
+        error: uploadError.message,
+        code: 'IMAGE_PROCESSING_ERROR'
+      });
     }
 
     // Get garment details
@@ -260,7 +304,8 @@ app.post('/api/try-on', async (req, res) => {
       metadata: {
         user_agent: req.get('User-Agent'),
         ip_address: req.ip,
-        image_size: userImage.length
+        image_size: fileSize,
+        upload_format: uploadedFile ? 'multipart/form-data' : 'base64'
       }
     };
 
@@ -370,10 +415,14 @@ app.post('/api/try-on', async (req, res) => {
     }
   } catch (error) {
     console.error('Try-on session creation failed:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({
       success: false,
       message: 'Internal server error',
-      error: error.message
+      error: process.env.NODE_ENV === 'production' 
+        ? 'An error occurred while processing your request' 
+        : error.message,
+      code: 'INTERNAL_ERROR'
     });
   }
 });
@@ -1031,10 +1080,50 @@ app.use((req, res) => {
   });
 });
 
-// Error handler
+// Global error handler (must be last)
 app.use((error, req, res, next) => {
-  console.error('API Error:', error);
+  // Handle multer errors
+  if (error instanceof multer.MulterError) {
+    let message = 'File upload error';
+    let code = 'UPLOAD_ERROR';
 
+    switch (error.code) {
+      case 'LIMIT_FILE_SIZE':
+        message = `File too large. Maximum size: ${process.env.MAX_FILE_SIZE || '10MB'}`;
+        code = 'FILE_TOO_LARGE';
+        break;
+      case 'LIMIT_FILE_COUNT':
+        message = 'Too many files uploaded';
+        code = 'TOO_MANY_FILES';
+        break;
+      case 'LIMIT_UNEXPECTED_FILE':
+        message = 'Unexpected file field';
+        code = 'UNEXPECTED_FILE';
+        break;
+      default:
+        message = error.message;
+    }
+
+    return res.status(400).json({
+      success: false,
+      message,
+      code,
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  // Handle file filter errors
+  if (error.message && error.message.includes('Invalid file type')) {
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+      code: 'INVALID_FILE_TYPE',
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  // Handle other errors
+  console.error('API Error:', error);
   const statusCode = error.statusCode || error.status || 500;
   const message = process.env.NODE_ENV === 'production'
     ? 'Internal server error'
@@ -1047,7 +1136,7 @@ app.use((error, req, res, next) => {
     timestamp: new Date().toISOString(),
     ...(process.env.NODE_ENV === 'development' && {
       stack: error.stack,
-      details: error
+      details: error.message
     })
   });
 });

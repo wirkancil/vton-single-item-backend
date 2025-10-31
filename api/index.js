@@ -48,7 +48,7 @@ function getSupabaseServices() {
       getSupabaseServices._cache = require('./services/supabaseService');
       console.error('[VTON] ✅ Supabase services loaded successfully');
       console.error('[VTON] Available functions:', Object.keys(getSupabaseServices._cache || {}).slice(0, 5));
-    } catch (error) {
+} catch (error) {
       console.error('[VTON] ❌ Failed to load Supabase services:', error.message);
       console.error('[VTON] Error stack:', error.stack);
       getSupabaseServices._cache = null; // Mark as failed so we don't retry
@@ -62,7 +62,7 @@ function getPixazoServices() {
     try {
       getPixazoServices._cache = require('./services/pixazoService');
       console.error('[VTON] Pixazo services loaded successfully');
-    } catch (error) {
+} catch (error) {
       console.error('[VTON] ❌ Failed to load Pixazo services:', error.message);
       getPixazoServices._cache = null;
     }
@@ -95,7 +95,7 @@ app.get('/', (req, res) => {
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'production',
     vercel: true,
-        services_loaded: {
+    services_loaded: {
       supabase: getSupabaseServices() ? 'loaded' : 'failed',
       pixazo: getPixazoServices() ? 'loaded' : 'failed'
     },
@@ -249,15 +249,15 @@ app.post('/api/try-on', upload.fields([
       } else if (userImageBase64) {
         // Base64 JSON format
         const base64Data = userImageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
-        imageBuffer = Buffer.from(base64Data, 'base64');
-        fileSize = imageBuffer.length;
+      imageBuffer = Buffer.from(base64Data, 'base64');
+      fileSize = imageBuffer.length;
 
-        // Extract original filename if available from data URL
+      // Extract original filename if available from data URL
         if (userImageBase64.includes('filename=')) {
           const filenameMatch = userImageBase64.match(/filename=([^;]+)/);
-          if (filenameMatch) {
-            originalFileName = filenameMatch[1];
-          }
+        if (filenameMatch) {
+          originalFileName = filenameMatch[1];
+        }
         }
         console.error(`[VTON] Received base64 image: ${originalFileName} (${fileSize} bytes)`);
       }
@@ -320,13 +320,13 @@ app.post('/api/try-on', upload.fields([
       }
     } else if (garmentId) {
       // Get garment from database if no upload
-      if (garmentId !== REAL_GARMENT_DATA.id && supabaseServices && supabaseServices.getGarmentById) {
-        try {
-          garment = await supabaseServices.getGarmentById(garmentId);
+    if (garmentId !== REAL_GARMENT_DATA.id && supabaseServices && supabaseServices.getGarmentById) {
+      try {
+        garment = await supabaseServices.getGarmentById(garmentId);
           garmentImageUrl = garment.image_url;
           console.error(`[VTON] Got garment from database: ${garment.name}`);
-        } catch (dbError) {
-          console.warn('⚠️  Using fallback garment data:', dbError.message);
+      } catch (dbError) {
+        console.warn('⚠️  Using fallback garment data:', dbError.message);
           garmentImageUrl = REAL_GARMENT_DATA.image_url;
         }
       } else {
@@ -381,12 +381,12 @@ app.post('/api/try-on', upload.fields([
       });
     }
 
-    try {
-      await supabaseServices.createTryOnSession(sessionData);
+      try {
+        await supabaseServices.createTryOnSession(sessionData);
       console.error(`[VTON] Session saved to database - sessionId: ${sessionId}`);
 
       // Also save user image metadata to database (optional)
-      if (supabaseServices.createUserImage) {
+        if (supabaseServices.createUserImage) {
         try {
           const imageData = {
             user_id: userId || 'anonymous',
@@ -405,9 +405,9 @@ app.post('/api/try-on', upload.fields([
         } catch (imageError) {
           // Non-critical, just log
           console.log(`⚠️  User image metadata save failed (non-critical): ${imageError.message}`);
+          }
         }
-      }
-    } catch (dbError) {
+      } catch (dbError) {
       console.error('❌ Failed to save session to database:', dbError.message);
       
       // Check if it's FK constraint error for anonymous user
@@ -838,67 +838,65 @@ async function processPixazoRequest(sessionId, userImageUrl, garmentImageUrl) {
             status: 'submitted'
           });
           console.error(`${logPrefix} Job ID linked to session in database`);
-          
-          // Start background polling as fallback (non-blocking)
-          // This ensures we get result even if webhook doesn't fire
-          setImmediate(async () => {
-            try {
-              console.error(`${logPrefix} Starting background polling for job ${jobInfo.jobId}`);
-              const pixazoServices = getPixazoServices();
-              if (pixazoServices && pixazoServices.pollPixazoResult) {
-                // Poll with shorter timeout (3 minutes) as fallback
-                const resultBuffer = await pixazoServices.pollPixazoResult(jobInfo.jobId, 180000, 5000); // 3 min max, poll every 5 sec
-                
-                if (resultBuffer) {
-                  const supabaseServices = getSupabaseServices();
-                  if (supabaseServices && supabaseServices.uploadImage) {
-                    const resultImagePath = `vton-sessions/${sessionId}/result-${Date.now()}.jpg`;
-                    const resultImageUrl = await supabaseServices.uploadImage(resultImagePath, resultBuffer, 'image/jpeg');
-                    
-                    await supabaseServices.updateTryOnSession(sessionId, {
-                      status: 'completed',
-                      result_image_url: resultImageUrl,
-                      completed_at: new Date().toISOString(),
-                      updated_at: new Date().toISOString()
-                    });
-                    
-                    console.error(`${logPrefix} ✅ Background polling completed. Result uploaded: ${resultImageUrl}`);
-                  }
-                }
-              }
-            } catch (pollError) {
-              console.error(`${logPrefix} Background polling failed (non-critical, webhook will handle):`, pollError.message);
-              // Don't throw - webhook is primary mechanism
-            }
-          });
         } catch (linkError) {
           console.error(`${logPrefix} ⚠️  Failed to link job to session:`, linkError.message);
           // Non-critical - continue even if linking fails
         }
       }
       
+      // Start quick polling (non-blocking) for faster results
+      // Poll for up to 2 minutes with 3 second intervals for quick results
+      // Webhook will still be the primary mechanism, but this helps get results faster
+      const pixazoServices = getPixazoServices();
+      if (pixazoServices && pixazoServices.pollPixazoResult && jobInfo.jobId) {
+        // Don't await - let it run in background while we return response
+        pixazoServices.pollPixazoResult(jobInfo.jobId, 120000, 3000) // 2 min, poll every 3 sec
+          .then(async (resultBuffer) => {
+            if (resultBuffer) {
+              const supabaseServices = getSupabaseServices();
+              if (supabaseServices && supabaseServices.uploadImage) {
+                const resultImagePath = `vton-sessions/${sessionId}/result-${Date.now()}.jpg`;
+                const resultImageUrl = await supabaseServices.uploadImage(resultImagePath, resultBuffer, 'image/jpeg');
+                
+                await supabaseServices.updateTryOnSession(sessionId, {
+                  status: 'completed',
+                  result_image_url: resultImageUrl,
+                  completed_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString()
+                });
+                
+                console.error(`${logPrefix} ✅ Quick polling completed. Result uploaded: ${resultImageUrl}`);
+              }
+            }
+          })
+          .catch((pollError) => {
+            // Silent fail - webhook is primary, polling is just optimization
+            console.error(`${logPrefix} Quick polling ended (webhook will handle):`, pollError.message);
+          });
+      }
+      
       return jobInfo;
     } else {
       // Fallback: try old method if new method not available
       console.log('⚠️  Using legacy polling method...');
-      const resultBuffer = await pixazoServices.performVirtualTryOn(userImageUrl, garmentImageUrl, {
-        sessionId,
+    const resultBuffer = await pixazoServices.performVirtualTryOn(userImageUrl, garmentImageUrl, {
+      sessionId,
         maxWaitTime: 600000, // 10 minutes
         pollingInterval: 10000 // 10 seconds
-      });
+    });
 
-      if (resultBuffer) {
+    if (resultBuffer) {
         let resultImageUrl = null;
-        if (supabaseServices && supabaseServices.uploadImage) {
+      if (supabaseServices && supabaseServices.uploadImage) {
           const resultImagePath = `vton-sessions/${sessionId}/result-${Date.now()}.jpg`;
           resultImageUrl = await supabaseServices.uploadImage(resultImagePath, resultBuffer, 'image/jpeg');
-          
-          await supabaseServices.updateTryOnSession(sessionId, {
-            status: 'completed',
-            result_image_url: resultImageUrl,
-            completed_at: new Date().toISOString()
-          });
-        }
+
+        await supabaseServices.updateTryOnSession(sessionId, {
+          status: 'completed',
+          result_image_url: resultImageUrl,
+          completed_at: new Date().toISOString()
+        });
+      }
       }
     }
   } catch (error) {
@@ -972,8 +970,8 @@ app.post('/api/webhooks/pixazo', async (req, res) => {
                 console.error('[VTON-Webhook] Failed to check job status:', statusError);
               }
             }
-            return res.status(400).json({
-              success: false,
+      return res.status(400).json({
+        success: false,
               message: 'Missing status in webhook and unable to fetch from API'
             });
           }
@@ -1035,8 +1033,8 @@ async function handleWebhookWithSessionId(sessionId, req, res) {
     // Handle different statuses
     if (status === 'completed' || status === 'success') {
       updateData.status = 'completed';
-      
-      if (result_image_url) {
+
+    if (result_image_url) {
         // Download result image and upload to Supabase Storage
         try {
           const axios = require('axios');
@@ -1054,7 +1052,7 @@ async function handleWebhookWithSessionId(sessionId, req, res) {
             console.error(`[VTON-Webhook] ✅ Result image uploaded to Supabase: ${finalResultUrl}`);
           } else {
             // Fallback: use Pixazo URL directly if upload fails
-            updateData.result_image_url = result_image_url;
+      updateData.result_image_url = result_image_url;
             console.error('[VTON-Webhook] ⚠️  Supabase upload not available, using Pixazo URL directly');
           }
         } catch (downloadError) {

@@ -435,27 +435,56 @@ app.get('/api/try-on/:sessionId/status', async (req, res) => {
 
     let session = null;
 
-    // Try to get from database
+    // Try to get from database (REQUIRED - no mock fallback)
     if (supabaseServices && supabaseServices.getTryOnSessionById) {
       try {
         session = await supabaseServices.getTryOnSessionById(sessionId, userId || 'anonymous');
       } catch (dbError) {
-        console.warn('⚠️  Database fetch failed, using mock session:', dbError.message);
+        console.error('❌ Database fetch failed:', dbError.message);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to retrieve session from database',
+          error: dbError.message,
+          code: 'DATABASE_ERROR'
+        });
       }
+    } else {
+      return res.status(503).json({
+        success: false,
+        message: 'Database service not available',
+        code: 'SERVICE_UNAVAILABLE'
+      });
     }
 
-    // Fallback mock session data
+    // If session not found, return 404 instead of mock data
     if (!session) {
-      session = {
-        id: sessionId,
-        status: 'completed',
-        progress: 100,
-        original_user_image_url: `https://mock-storage.vton.ai/user-images/${sessionId}.jpg`,
-        result_image_url: `https://mock-results.vton.ai/${sessionId}/result.jpg`,
-        garment_id: REAL_GARMENT_DATA.id,
-        created_at: new Date().toISOString(),
-        completed_at: new Date().toISOString()
-      };
+      return res.status(404).json({
+        success: false,
+        message: 'Session not found',
+        code: 'SESSION_NOT_FOUND',
+        sessionId
+      });
+    }
+    
+    // If status is still processing, return processing status
+    if (session.status === 'processing' || session.status === 'queued') {
+      return res.status(200).json({
+        success: true,
+        data: {
+          sessionId: session.id,
+          status: session.status,
+          progress: session.progress || 0,
+          userImageUrl: session.original_user_image_url,
+          resultImageUrl: null, // Not ready yet
+          garmentId: session.garment_id,
+          createdAt: session.created_at,
+          updatedAt: session.updated_at,
+          completedAt: null,
+          errorMessage: session.error_message
+        },
+        message: 'Processing in progress',
+        timestamp: new Date().toISOString()
+      });
     }
 
     res.status(200).json({
@@ -505,8 +534,8 @@ async function processPixazoRequest(sessionId, userImageUrl, garmentImageUrl) {
     });
 
     if (resultBuffer) {
-      // Upload result to Supabase Storage
-      let resultImageUrl = `https://mock-results.vton.ai/${sessionId}/result.jpg`;
+      // Upload result to Supabase Storage (REQUIRED - no mock fallback)
+      let resultImageUrl = null;
 
       if (supabaseServices && supabaseServices.uploadImage) {
         try {
@@ -514,8 +543,15 @@ async function processPixazoRequest(sessionId, userImageUrl, garmentImageUrl) {
           resultImageUrl = await supabaseServices.uploadImage(resultImagePath, resultBuffer, 'image/jpeg');
           console.log(`✅ Real result uploaded to Supabase: ${resultImageUrl}`);
         } catch (uploadError) {
-          console.warn('⚠️  Failed to upload result to Supabase:', uploadError.message);
+          console.error('❌ Failed to upload result to Supabase:', uploadError.message);
+          throw new Error(`Failed to upload result image: ${uploadError.message}`);
         }
+      } else {
+        throw new Error('Supabase storage service not available');
+      }
+      
+      if (!resultImageUrl) {
+        throw new Error('Result image URL not generated');
       }
 
       // Update session with result

@@ -223,12 +223,19 @@ async function updateTryOnSession(sessionId, updateData) {
  */
 async function getTryOnSessionById(sessionId, userId) {
   try {
-    const { data, error } = await supabase
+    // Build query - if userId is 'anonymous' or not provided, allow access to any session
+    // Otherwise, restrict to user's own sessions for security
+    let query = supabase
       .from('try_on_history')
       .select('*')
-      .eq('id', sessionId)
-      .eq('user_id', userId) // Security: ensure user can only access their own sessions
-      .single();
+      .eq('id', sessionId);
+    
+    // Only filter by user_id if it's not anonymous
+    if (userId && userId !== 'anonymous') {
+      query = query.eq('user_id', userId);
+    }
+    
+    const { data, error } = await query.single();
 
     if (error) {
       if (error.code === 'PGRST116') {

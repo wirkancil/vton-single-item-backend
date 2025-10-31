@@ -8,8 +8,8 @@
     "dev": "nodemon src/server.js",
     "worker": "node src/workers/vtonWorker.js",
     "setup:db": "node scripts/setupDatabase.js",
-    "build": "mkdir -p dist && cp -r api dist/ && echo 'Build completed for Vercel deployment'",
-    "vercel-build": "npm run build"
+    "build": "echo 'No build step needed for Vercel serverless functions'",
+    "vercel-build": "echo 'No build step needed'"
   },
   "keywords": [
     "vton",

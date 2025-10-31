@@ -1,5 +1,7 @@
 {
   "version": 2,
+  "buildCommand": null,
+  "outputDirectory": null,
   "functions": {
     "api/index.js": {
       "maxDuration": 120

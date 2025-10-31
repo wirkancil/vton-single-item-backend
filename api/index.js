@@ -309,14 +309,22 @@ app.post('/api/try-on', upload.single('userImage'), async (req, res, next) => {
       }
     };
 
-    // Save to database if available
-    if (supabaseServices && supabaseServices.createTryOnSession) {
-      try {
-        await supabaseServices.createTryOnSession(sessionData);
-        console.log(`✅ Session saved to database`);
+    // Save to database (REQUIRED - no mock fallback)
+    if (!supabaseServices || !supabaseServices.createTryOnSession) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database service not available',
+        code: 'SERVICE_UNAVAILABLE'
+      });
+    }
 
-        // Also save user image metadata to database
-        if (supabaseServices.createUserImage) {
+    try {
+      await supabaseServices.createTryOnSession(sessionData);
+      console.log(`✅ Session saved to database`);
+
+      // Also save user image metadata to database (optional)
+      if (supabaseServices.createUserImage) {
+        try {
           const imageData = {
             user_id: userId || 'anonymous',
             session_id: sessionId,
@@ -330,13 +338,20 @@ app.post('/api/try-on', upload.single('userImage'), async (req, res, next) => {
           const imageRecord = await supabaseServices.createUserImage(imageData);
           if (imageRecord) {
             console.log(`✅ User image metadata saved to database: ${imageRecord.id}`);
-          } else {
-            console.log(`⚠️  User image table not available, skipping metadata storage`);
           }
+        } catch (imageError) {
+          // Non-critical, just log
+          console.log(`⚠️  User image metadata save failed (non-critical): ${imageError.message}`);
         }
-      } catch (dbError) {
-        console.warn('⚠️  Failed to save session to database:', dbError.message);
       }
+    } catch (dbError) {
+      console.error('❌ Failed to save session to database:', dbError.message);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to create session in database',
+        error: dbError.message,
+        code: 'DATABASE_ERROR'
+      });
     }
 
     // Start real AI processing if Pixazo available

@@ -46,8 +46,14 @@ let storageServices = null;
 try {
   supabaseServices = require('./services/supabaseService');
   console.log('✅ Supabase services loaded successfully');
+  console.error('[VTON] Supabase services loaded:', {
+    hasUploadImage: !!supabaseServices?.uploadImage,
+    hasSupabase: !!supabaseServices?.supabase,
+    keys: Object.keys(supabaseServices || {})
+  });
 } catch (error) {
   console.error('❌ Failed to load Supabase services:', error.message);
+  console.error('[VTON] Error stack:', error.stack);
 }
 
 try {

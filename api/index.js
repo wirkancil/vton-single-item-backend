@@ -838,6 +838,39 @@ async function processPixazoRequest(sessionId, userImageUrl, garmentImageUrl) {
             status: 'submitted'
           });
           console.error(`${logPrefix} Job ID linked to session in database`);
+          
+          // Start background polling as fallback (non-blocking)
+          // This ensures we get result even if webhook doesn't fire
+          setImmediate(async () => {
+            try {
+              console.error(`${logPrefix} Starting background polling for job ${jobInfo.jobId}`);
+              const pixazoServices = getPixazoServices();
+              if (pixazoServices && pixazoServices.pollPixazoResult) {
+                // Poll with shorter timeout (3 minutes) as fallback
+                const resultBuffer = await pixazoServices.pollPixazoResult(jobInfo.jobId, 180000, 5000); // 3 min max, poll every 5 sec
+                
+                if (resultBuffer) {
+                  const supabaseServices = getSupabaseServices();
+                  if (supabaseServices && supabaseServices.uploadImage) {
+                    const resultImagePath = `vton-sessions/${sessionId}/result-${Date.now()}.jpg`;
+                    const resultImageUrl = await supabaseServices.uploadImage(resultImagePath, resultBuffer, 'image/jpeg');
+                    
+                    await supabaseServices.updateTryOnSession(sessionId, {
+                      status: 'completed',
+                      result_image_url: resultImageUrl,
+                      completed_at: new Date().toISOString(),
+                      updated_at: new Date().toISOString()
+                    });
+                    
+                    console.error(`${logPrefix} ✅ Background polling completed. Result uploaded: ${resultImageUrl}`);
+                  }
+                }
+              }
+            } catch (pollError) {
+              console.error(`${logPrefix} Background polling failed (non-critical, webhook will handle):`, pollError.message);
+              // Don't throw - webhook is primary mechanism
+            }
+          });
         } catch (linkError) {
           console.error(`${logPrefix} ⚠️  Failed to link job to session:`, linkError.message);
           // Non-critical - continue even if linking fails

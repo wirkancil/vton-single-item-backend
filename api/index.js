@@ -200,16 +200,23 @@ app.get('/api/garments', async (req, res) => {
 });
 
 // Create new try-on session with real processing
-app.post('/api/try-on', upload.single('userImage'), async (req, res, next) => {
+// Support multiple file uploads: userImage and garmentImage
+app.post('/api/try-on', upload.fields([
+  { name: 'userImage', maxCount: 1 },
+  { name: 'garmentImage', maxCount: 1 }
+]), async (req, res, next) => {
   try {
     const { garmentId, userId } = req.body;
-    const uploadedFile = req.file;
+    const uploadedFiles = req.files;
+    const uploadedFile = uploadedFiles?.userImage?.[0]; // Get user image from files
+    const uploadedGarmentFile = uploadedFiles?.garmentImage?.[0]; // Get garment image from files
 
     // Validate required fields
-    if (!garmentId) {
+    // Either garmentId OR garmentImage must be provided
+    if (!garmentId && !uploadedGarmentFile) {
       return res.status(400).json({
         success: false,
-        message: 'Missing required field: garmentId',
+        message: 'Missing required field: either garmentId or garmentImage must be provided',
         code: 'MISSING_FIELDS'
       });
     }
@@ -281,15 +288,54 @@ app.post('/api/try-on', upload.single('userImage'), async (req, res, next) => {
       });
     }
 
-    // Get garment details
+    // Handle garment image - use uploaded garment image if provided, otherwise from database
+    let garmentImageUrl;
     let garment = REAL_GARMENT_DATA;
-    if (garmentId !== REAL_GARMENT_DATA.id && supabaseServices && supabaseServices.getGarmentById) {
+    
+    if (uploadedGarmentFile) {
+      // Upload garment image if provided
       try {
-        garment = await supabaseServices.getGarmentById(garmentId);
-        console.log(`✅ Got garment from database: ${garment.name}`);
-      } catch (dbError) {
-        console.warn('⚠️  Using fallback garment data:', dbError.message);
+        const garmentImagePath = `vton-sessions/${sessionId}/garment-image-${Date.now()}.jpg`;
+        garmentImageUrl = await supabaseServices.uploadImage(garmentImagePath, uploadedGarmentFile.buffer, 'image/jpeg');
+        console.log(`✅ Garment image uploaded to Supabase: ${garmentImageUrl}`);
+      } catch (garmentUploadError) {
+        console.error('Failed to upload garment image:', garmentUploadError);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to process garment image',
+          error: garmentUploadError.message,
+          code: 'GARMENT_IMAGE_ERROR'
+        });
       }
+    } else if (garmentId) {
+      // Get garment from database if no upload
+      if (garmentId !== REAL_GARMENT_DATA.id && supabaseServices && supabaseServices.getGarmentById) {
+        try {
+          garment = await supabaseServices.getGarmentById(garmentId);
+          garmentImageUrl = garment.image_url;
+          console.log(`✅ Got garment from database: ${garment.name}`);
+        } catch (dbError) {
+          console.warn('⚠️  Using fallback garment data:', dbError.message);
+          garmentImageUrl = REAL_GARMENT_DATA.image_url;
+        }
+      } else {
+        garmentImageUrl = REAL_GARMENT_DATA.image_url;
+      }
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Either garmentId or garmentImage must be provided',
+        code: 'MISSING_GARMENT'
+      });
+    }
+
+    // Ensure we have a garment image URL
+    if (!garmentImageUrl) {
+      return res.status(400).json({
+        success: false,
+        message: 'Garment image URL not available',
+        code: 'GARMENT_IMAGE_MISSING'
+      });
     }
 
     // Handle user_id for anonymous users
@@ -380,7 +426,7 @@ app.post('/api/try-on', upload.single('userImage'), async (req, res, next) => {
       // This ensures job is actually submitted before function terminates
       let jobInfo = null;
       try {
-        jobInfo = await processPixazoRequest(sessionId, userImageUrl, garment.image_url);
+        jobInfo = await processPixazoRequest(sessionId, userImageUrl, garmentImageUrl);
         console.log(`✅ Job submitted successfully: ${jobInfo?.jobId || 'N/A'}`);
       } catch (submitError) {
         console.error(`❌ Job submission failed for session ${sessionId}:`, submitError);
@@ -421,7 +467,7 @@ app.post('/api/try-on', upload.single('userImage'), async (req, res, next) => {
       console.log('🤖 Starting real AI processing (legacy polling)...');
 
       // Process in background (this might not work in serverless)
-      processPixazoRequest(sessionId, userImageUrl, garment.image_url).catch(error => {
+      processPixazoRequest(sessionId, userImageUrl, garmentImageUrl).catch(error => {
         console.error(`❌ AI processing failed for session ${sessionId}:`, error);
 
         // Update session with error

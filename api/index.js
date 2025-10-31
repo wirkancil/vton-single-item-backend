@@ -293,14 +293,13 @@ app.post('/api/try-on', upload.single('userImage'), async (req, res, next) => {
     }
 
     // Handle user_id for anonymous users
-    // Note: Database has FK constraint to auth.users, so we need a valid UUID
-    // Since we're using service role key, we can insert with any UUID
-    // But RLS policies might block if user doesn't exist in auth.users
-    // Solution: Service role bypasses RLS, so we can use generated UUID
+    // Database requires user_id to be valid UUID that exists in auth.users (FK constraint)
+    // Solution: Create or use a system anonymous user
+    // For now, we'll generate a UUID and catch FK error to provide helpful message
     let finalUserId = userId;
     if (!finalUserId || finalUserId === 'anonymous') {
-      // Generate UUID for anonymous session
-      // Service role key will bypass RLS, so FK constraint check is less strict
+      // Try to insert with generated UUID
+      // If FK constraint fails, we'll catch and provide migration instructions
       finalUserId = uuidv4();
       console.log(`⚠️  Generated UUID for anonymous user: ${finalUserId}`);
     }
@@ -354,6 +353,18 @@ app.post('/api/try-on', upload.single('userImage'), async (req, res, next) => {
       }
     } catch (dbError) {
       console.error('❌ Failed to save session to database:', dbError.message);
+      
+      // Check if it's FK constraint error for anonymous user
+      if (dbError.message && dbError.message.includes('foreign key constraint') && (!userId || userId === 'anonymous')) {
+        return res.status(500).json({
+          success: false,
+          message: 'Database configuration error: Anonymous users not supported',
+          error: 'Foreign key constraint requires user_id to exist in auth.users. Please run fix-anonymous-user.sql migration in Supabase.',
+          code: 'FK_CONSTRAINT_ERROR',
+          solution: 'Run the SQL migration in fix-anonymous-user.sql to allow anonymous sessions'
+        });
+      }
+      
       return res.status(500).json({
         success: false,
         message: 'Failed to create session in database',

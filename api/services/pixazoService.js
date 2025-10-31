@@ -89,8 +89,16 @@ function prepareInputData(userImageUrl, garmentImageUrl, callbackUrl = "") {
  * @returns {string} Callback URL
  */
 function generateCallbackUrl(sessionId = null) {
-  const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
-  const callbackUrl = `${baseUrl}/api/webhooks/pixazo`;
+  // Use production URL from environment, fallback to VERCEL_URL, then default
+  // Vercel automatically provides VERCEL_URL in production
+  const baseUrl = process.env.BASE_URL || 
+                  process.env.VERCEL_URL || 
+                  process.env.NEXT_PUBLIC_BASE_URL ||
+                  'https://vton-item.ai-agentic.tech';
+  
+  // Ensure URL has https:// protocol
+  const finalBaseUrl = baseUrl.startsWith('http') ? baseUrl : `https://${baseUrl}`;
+  const callbackUrl = `${finalBaseUrl}/api/webhooks/pixazo`;
 
   // Add session ID as query parameter for tracking (optional)
   if (sessionId) {

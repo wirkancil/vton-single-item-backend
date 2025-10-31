@@ -6,12 +6,12 @@ const { v4: uuidv4 } = require('uuid');
 // Create Express app for serverless function
 const app = express();
 
-// Configure multer for file uploads
+// Configure multer for file uploads (support multiple files)
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: parseInt(process.env.MAX_FILE_SIZE) || 10 * 1024 * 1024, // 10MB
-    files: 1
+    files: 2 // Allow up to 2 files: userImage and garmentImage
   },
   fileFilter: (req, file, cb) => {
     const allowedMimeTypes = process.env.ALLOWED_MIME_TYPES?.split(',') ||

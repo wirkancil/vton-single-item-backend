@@ -10,7 +10,7 @@ api/index-mock.js
 api/try-on.js
 api/webhooks.js
 api/controllers/
-api/services/
+# JANGAN ignore api/services/ karena diperlukan oleh api/index.js!
 src/
 
 # Ignore test files

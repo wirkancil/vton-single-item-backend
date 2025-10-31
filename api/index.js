@@ -687,8 +687,19 @@ async function processPixazoRequest(sessionId, userImageUrl, garmentImageUrl) {
       console.error(logPrefix, successMsg); // Also log to stderr
       console.error(logPrefix, webhookMsg); // Also log to stderr
 
-      // Store job_id in session metadata for tracking (optional - webhook uses session_id from URL)
-      // For now, webhook will use session_id from callback URL query parameter
+      // Store job_id in database for tracking and webhook lookup
+      if (getSupabaseServices() && getSupabaseServices().linkJobToSession && jobInfo.jobId) {
+        try {
+          await getSupabaseServices().linkJobToSession(sessionId, jobInfo.jobId, {
+            callback_url: jobInfo.callbackUrl,
+            status: 'submitted'
+          });
+          console.error(`${logPrefix} Job ID linked to session in database`);
+        } catch (linkError) {
+          console.error(`${logPrefix} ⚠️  Failed to link job to session:`, linkError.message);
+          // Non-critical - continue even if linking fails
+        }
+      }
       
       return jobInfo;
     } else {

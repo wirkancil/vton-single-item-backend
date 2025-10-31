@@ -723,27 +723,111 @@ async function processPixazoRequest(sessionId, userImageUrl, garmentImageUrl) {
 // Webhook for Pixazo API
 app.post('/api/webhooks/pixazo', async (req, res) => {
   try {
-    // Pixazo may send session_id in query params (from callback URL) or in body
-    const sessionId = req.query.session_id || req.body.session_id;
-    const { job_id, status, result_image_url, error_message } = req.body;
+    // Log full webhook payload for debugging
+    console.error('[VTON-Webhook] Full webhook payload:', JSON.stringify(req.body, null, 2));
+    console.error('[VTON-Webhook] Query params:', JSON.stringify(req.query, null, 2));
+    console.error('[VTON-Webhook] Headers:', JSON.stringify(req.headers, null, 2));
 
-    console.log('📥 Received Pixazo webhook:', { job_id, status, session_id: sessionId });
+    // Pixazo may send session_id in query params (from callback URL) or in body
+    const sessionId = req.query.session_id || req.body.session_id || req.body.sessionId;
+    
+    // Handle different webhook formats from Pixazo
+    // Format 1: { job_id, status, result_image_url, error_message }
+    // Format 2: { id, status, result_image_url, error }
+    // Format 3: { jobId, status, resultUrl, message }
+    const job_id = req.body.job_id || req.body.id || req.body.jobId;
+    const status = req.body.status || req.body.state || req.body.status_code;
+    const result_image_url = req.body.result_image_url || req.body.result_image_url || req.body.resultUrl || req.body.result_url;
+    const error_message = req.body.error_message || req.body.error || req.body.message;
+
+    console.error('[VTON-Webhook] Parsed values:', { 
+      sessionId, 
+      job_id, 
+      status, 
+      has_result_url: !!result_image_url,
+      error_message 
+    });
+
+    // Try to find session_id if not provided
+    if (!sessionId && job_id && supabaseServices && supabaseServices.getTryOnSessionByJobId) {
+      try {
+        const sessionData = await supabaseServices.getTryOnSessionByJobId(job_id);
+        if (sessionData && sessionData.id) {
+          console.error(`[VTON-Webhook] Found session ${sessionData.id} for job ${job_id}`);
+          // Use the found session ID
+          const foundSessionId = sessionData.id;
+          
+          // Continue with found session ID
+          if (!status) {
+            console.error('[VTON-Webhook] ⚠️  Webhook received without status, attempting to check job status');
+            // Try to get status from Pixazo API
+            if (pixazoServices && pixazoServices.checkJobStatus && job_id) {
+              try {
+                const jobStatus = await pixazoServices.checkJobStatus(job_id);
+                console.error('[VTON-Webhook] Job status from API:', jobStatus);
+                // Process webhook with job status data
+                // Recursively call this handler logic with the status data
+                req.body.status = jobStatus.status || jobStatus.state;
+                req.body.result_image_url = jobStatus.result_image_url || jobStatus.result_url;
+                return await handleWebhookWithSessionId(foundSessionId, req, res);
+              } catch (statusError) {
+                console.error('[VTON-Webhook] Failed to check job status:', statusError);
+              }
+            }
+            return res.status(400).json({
+              success: false,
+              message: 'Missing status in webhook and unable to fetch from API'
+            });
+          }
+          
+          return await handleWebhookWithSessionId(foundSessionId, req, res);
+        }
+      } catch (lookupError) {
+        console.error('[VTON-Webhook] Failed to lookup session by job_id:', lookupError);
+      }
+    }
 
     if (!sessionId) {
-      console.warn('⚠️  Webhook received without session_id');
-      return res.status(400).json({
-        success: false,
-        message: 'Missing session_id in webhook'
-      });
+      console.error('[VTON-Webhook] ⚠️  Webhook received without session_id and unable to find by job_id');
+      // Still process if we have job_id - we'll update by job_id later
+      if (job_id) {
+        console.error('[VTON-Webhook] Processing with job_id only:', job_id);
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: 'Missing session_id in webhook and no job_id provided'
+        });
+      }
     }
 
     if (!status) {
-      console.warn('⚠️  Webhook received without status');
+      console.error('[VTON-Webhook] ⚠️  Webhook received without status');
       return res.status(400).json({
         success: false,
         message: 'Missing status in webhook'
       });
     }
+
+    // Process webhook with session ID
+    return await handleWebhookWithSessionId(sessionId, req, res);
+  } catch (error) {
+    console.error('[VTON-Webhook] ❌ Failed to process webhook:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to process webhook',
+      error: error.message
+    });
+  }
+});
+
+// Helper function to handle webhook processing with session ID
+async function handleWebhookWithSessionId(sessionId, req, res) {
+  try {
+    const status = req.body.status || req.body.state || req.body.status_code;
+    const result_image_url = req.body.result_image_url || req.body.resultUrl || req.body.result_url;
+    const error_message = req.body.error_message || req.body.error || req.body.message;
+
+    console.error(`[VTON-Webhook] Processing webhook for session ${sessionId} with status: ${status}`);
 
     // Prepare update data
     const updateData = {
@@ -769,14 +853,14 @@ app.post('/api/webhooks/pixazo', async (req, res) => {
             const resultImagePath = `vton-sessions/${sessionId}/result-${Date.now()}.jpg`;
             const finalResultUrl = await supabaseServices.uploadImage(resultImagePath, resultBuffer, 'image/jpeg');
             updateData.result_image_url = finalResultUrl;
-            console.log(`✅ Result image uploaded to Supabase: ${finalResultUrl}`);
+            console.error(`[VTON-Webhook] ✅ Result image uploaded to Supabase: ${finalResultUrl}`);
           } else {
             // Fallback: use Pixazo URL directly if upload fails
             updateData.result_image_url = result_image_url;
-            console.warn('⚠️  Supabase upload not available, using Pixazo URL directly');
+            console.error('[VTON-Webhook] ⚠️  Supabase upload not available, using Pixazo URL directly');
           }
         } catch (downloadError) {
-          console.error('❌ Failed to download/upload result image:', downloadError);
+          console.error('[VTON-Webhook] ❌ Failed to download/upload result image:', downloadError);
           // Still mark as completed but log error
           updateData.error_message = `Failed to process result image: ${downloadError.message}`;
         }
@@ -800,9 +884,9 @@ app.post('/api/webhooks/pixazo', async (req, res) => {
     // Update session in database
     if (supabaseServices && supabaseServices.updateTryOnSession) {
       await supabaseServices.updateTryOnSession(sessionId, updateData);
-      console.log(`✅ Updated session ${sessionId} with status: ${updateData.status}`);
+      console.error(`[VTON-Webhook] ✅ Updated session ${sessionId} with status: ${updateData.status}`);
     } else {
-      console.error('❌ Supabase service not available');
+      console.error('[VTON-Webhook] ❌ Supabase service not available');
       return res.status(503).json({
         success: false,
         message: 'Database service not available'
@@ -817,14 +901,10 @@ app.post('/api/webhooks/pixazo', async (req, res) => {
       status: updateData.status
     });
   } catch (error) {
-    console.error('❌ Failed to process webhook:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to process webhook',
-      error: error.message
-    });
+    console.error(`[VTON-Webhook] ❌ Error handling webhook for session ${sessionId}:`, error);
+    throw error;
   }
-});
+}
 
 // =============================================
 // MODEL MANAGEMENT ROUTES

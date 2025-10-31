@@ -292,7 +292,7 @@ app.post('/api/try-on', upload.single('userImage'), async (req, res, next) => {
       }
     }
 
-    // Create session record
+    // Create session record (only fields that exist in database schema)
     const sessionData = {
       id: sessionId,
       user_id: userId || 'anonymous',
@@ -300,13 +300,8 @@ app.post('/api/try-on', upload.single('userImage'), async (req, res, next) => {
       original_user_image_url: userImageUrl,
       status: 'processing',
       created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      metadata: {
-        user_agent: req.get('User-Agent'),
-        ip_address: req.ip,
-        image_size: fileSize,
-        upload_format: uploadedFile ? 'multipart/form-data' : 'base64'
-      }
+      updated_at: new Date().toISOString()
+      // Note: metadata field removed - not in database schema
     };
 
     // Save to database (REQUIRED - no mock fallback)

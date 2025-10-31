@@ -101,6 +101,57 @@ function generateCallbackUrl(sessionId = null) {
 }
 
 /**
+ * Submit virtual try-on job to Pixazo (async mode with webhook callback)
+ * @param {string} userImageUrl - URL of user image
+ * @param {string} garmentImageUrl - URL of garment image
+ * @param {Object} options - Additional options
+ * @returns {Promise<Object>} Job information with jobId
+ */
+async function submitVirtualTryOnJob(userImageUrl, garmentImageUrl, options = {}) {
+  try {
+    if (!PIXAZO_API_KEY) {
+      throw new Error('Pixazo API key not configured');
+    }
+
+    logger.info(`Submitting VTON job for user: ${userImageUrl}, garment: ${garmentImageUrl}`);
+
+    // Generate callback URL for this session
+    const callbackUrl = options.sessionId ? generateCallbackUrl(options.sessionId) : generateCallbackUrl();
+
+    // Prepare request data
+    const requestData = prepareInputData(userImageUrl, garmentImageUrl, callbackUrl);
+
+    logger.info('Sending request to Pixazo API...');
+    logger.info(`Callback URL: ${callbackUrl}`);
+
+    // Make API call (using POST directly to the base URL as it's the full endpoint)
+    const response = await pixazoClient.post('', requestData);
+
+    if (!response.data) {
+      throw new Error('No response data from Pixazo API');
+    }
+
+    // Handle asynchronous response - the API returns a job ID
+    if (response.data.id) {
+      const jobId = response.data.id;
+      logger.info(`Pixazo job submitted successfully. Job ID: ${jobId}`);
+      return { jobId, status: 'submitted', callbackUrl };
+    } else {
+      throw new Error('Unexpected response format from Pixazo API - no job ID');
+    }
+  } catch (error) {
+    logger.error('Virtual try-on submission failed:', {
+      userImageUrl,
+      garmentImageUrl,
+      error: error.message,
+      status: error.response?.status,
+      data: error.response?.data,
+    });
+    throw error;
+  }
+}
+
+/**
  * Perform virtual try-on using Pixazo Kolors API
  * @param {string} userImageUrl - URL of user image
  * @param {string} garmentImageUrl - URL of garment image
@@ -264,8 +315,8 @@ async function pollPixazoResult(jobId, maxWaitTime = 300000, pollInterval = 1000
 
     while (Date.now() - startTime < maxWaitTime) {
       try {
-        // Check job status
-        const statusResponse = await pixazoClient.get(`/${jobId}`);
+        // Check job status - use /status/{jobId} endpoint
+        const statusResponse = await pixazoClient.get(`/status/${jobId}`);
 
         if (!statusResponse.data) {
           throw new Error('No status data received from Pixazo API');
@@ -616,6 +667,7 @@ async function estimateProcessingTime(userImageUrl, garmentImageUrl) {
 
 module.exports = {
   performVirtualTryOn,
+  submitVirtualTryOnJob,  // New async submission method (better for serverless)
   pollPixazoResult,  // Added new polling function
   getApiUsage,
   checkApiHealth,

@@ -546,10 +546,10 @@ app.get('/api/try-on/:sessionId/status', async (req, res) => {
   }
 });
 
-// Background AI processing function
+// Background AI processing function - Submit job and let webhook handle completion
 async function processPixazoRequest(sessionId, userImageUrl, garmentImageUrl) {
   try {
-    console.log(`🤖 Processing Pixazo request for session ${sessionId}`);
+    console.log(`🤖 Submitting Pixazo job for session ${sessionId}`);
 
     // Update session status to processing
     if (supabaseServices && supabaseServices.updateTryOnSession) {
@@ -559,48 +559,45 @@ async function processPixazoRequest(sessionId, userImageUrl, garmentImageUrl) {
       });
     }
 
-    // Perform virtual try-on
-    // Increase timeout to 10 minutes (600000ms) for slow processing
-    const resultBuffer = await pixazoServices.performVirtualTryOn(userImageUrl, garmentImageUrl, {
-      sessionId,
-      maxWaitTime: 600000, // 10 minutes - increased for slow AI processing
-      pollingInterval: 10000 // 10 seconds - reasonable polling interval
-    });
+    // Submit job to Pixazo (async mode - webhook will handle completion)
+    // This is better for serverless environments where background tasks may not complete
+    if (pixazoServices && pixazoServices.submitVirtualTryOnJob) {
+      const jobInfo = await pixazoServices.submitVirtualTryOnJob(userImageUrl, garmentImageUrl, {
+        sessionId
+      });
 
-    if (resultBuffer) {
-      // Upload result to Supabase Storage (REQUIRED - no mock fallback)
-      let resultImageUrl = null;
+      console.log(`✅ Pixazo job submitted: ${jobInfo.jobId} for session ${sessionId}`);
+      console.log(`📞 Webhook URL: ${jobInfo.callbackUrl}`);
 
-      if (supabaseServices && supabaseServices.uploadImage) {
-        try {
+      // Store job_id in session metadata for tracking (optional - webhook uses session_id from URL)
+      // For now, webhook will use session_id from callback URL query parameter
+      
+      return jobInfo;
+    } else {
+      // Fallback: try old method if new method not available
+      console.log('⚠️  Using legacy polling method...');
+      const resultBuffer = await pixazoServices.performVirtualTryOn(userImageUrl, garmentImageUrl, {
+        sessionId,
+        maxWaitTime: 600000, // 10 minutes
+        pollingInterval: 10000 // 10 seconds
+      });
+
+      if (resultBuffer) {
+        let resultImageUrl = null;
+        if (supabaseServices && supabaseServices.uploadImage) {
           const resultImagePath = `vton-sessions/${sessionId}/result-${Date.now()}.jpg`;
           resultImageUrl = await supabaseServices.uploadImage(resultImagePath, resultBuffer, 'image/jpeg');
-          console.log(`✅ Real result uploaded to Supabase: ${resultImageUrl}`);
-        } catch (uploadError) {
-          console.error('❌ Failed to upload result to Supabase:', uploadError.message);
-          throw new Error(`Failed to upload result image: ${uploadError.message}`);
+          
+          await supabaseServices.updateTryOnSession(sessionId, {
+            status: 'completed',
+            result_image_url: resultImageUrl,
+            completed_at: new Date().toISOString()
+          });
         }
-      } else {
-        throw new Error('Supabase storage service not available');
       }
-      
-      if (!resultImageUrl) {
-        throw new Error('Result image URL not generated');
-      }
-
-      // Update session with result
-      if (supabaseServices && supabaseServices.updateTryOnSession) {
-        await supabaseServices.updateTryOnSession(sessionId, {
-          status: 'completed',
-          result_image_url: resultImageUrl,
-          completed_at: new Date().toISOString()
-        });
-      }
-
-      console.log(`✅ Real AI processing completed for session ${sessionId}`);
     }
   } catch (error) {
-    console.error(`❌ Real AI processing failed for session ${sessionId}:`, error);
+    console.error(`❌ Failed to submit Pixazo job for session ${sessionId}:`, error);
 
     // Update session with error
     if (supabaseServices && supabaseServices.updateTryOnSession) {
@@ -610,57 +607,108 @@ async function processPixazoRequest(sessionId, userImageUrl, garmentImageUrl) {
         updated_at: new Date().toISOString()
       });
     }
+    throw error; // Re-throw to be caught by caller
   }
 }
 
 // Webhook for Pixazo API
 app.post('/api/webhooks/pixazo', async (req, res) => {
   try {
-    const { job_id, status, result_image_url, error_message, session_id } = req.body;
+    // Pixazo may send session_id in query params (from callback URL) or in body
+    const sessionId = req.query.session_id || req.body.session_id;
+    const { job_id, status, result_image_url, error_message } = req.body;
 
-    console.log('📥 Received Pixazo webhook:', { job_id, status, session_id });
+    console.log('📥 Received Pixazo webhook:', { job_id, status, session_id: sessionId });
 
-    if (!job_id || !status) {
+    if (!sessionId) {
+      console.warn('⚠️  Webhook received without session_id');
       return res.status(400).json({
         success: false,
-        message: 'Invalid webhook payload'
+        message: 'Missing session_id in webhook'
       });
     }
 
-    // Update session status
+    if (!status) {
+      console.warn('⚠️  Webhook received without status');
+      return res.status(400).json({
+        success: false,
+        message: 'Missing status in webhook'
+      });
+    }
+
+    // Prepare update data
     const updateData = {
-      status: status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : status,
       updated_at: new Date().toISOString()
     };
 
-    if (result_image_url) {
-      updateData.result_image_url = result_image_url;
-    }
+    // Handle different statuses
+    if (status === 'completed' || status === 'success') {
+      updateData.status = 'completed';
+      
+      if (result_image_url) {
+        // Download result image and upload to Supabase Storage
+        try {
+          const axios = require('axios');
+          const imageResponse = await axios.get(result_image_url, {
+            responseType: 'arraybuffer',
+            timeout: 60000
+          });
 
-    if (error_message) {
-      updateData.error_message = error_message;
-    }
+          const resultBuffer = Buffer.from(imageResponse.data);
+          
+          if (supabaseServices && supabaseServices.uploadImage) {
+            const resultImagePath = `vton-sessions/${sessionId}/result-${Date.now()}.jpg`;
+            const finalResultUrl = await supabaseServices.uploadImage(resultImagePath, resultBuffer, 'image/jpeg');
+            updateData.result_image_url = finalResultUrl;
+            console.log(`✅ Result image uploaded to Supabase: ${finalResultUrl}`);
+          } else {
+            // Fallback: use Pixazo URL directly if upload fails
+            updateData.result_image_url = result_image_url;
+            console.warn('⚠️  Supabase upload not available, using Pixazo URL directly');
+          }
+        } catch (downloadError) {
+          console.error('❌ Failed to download/upload result image:', downloadError);
+          // Still mark as completed but log error
+          updateData.error_message = `Failed to process result image: ${downloadError.message}`;
+        }
 
-    if (status === 'completed') {
-      updateData.completed_at = new Date().toISOString();
-    }
-
-    // Update session if services available
-    if (supabaseServices && supabaseServices.updateTryOnSession) {
-      if (session_id) {
-        await supabaseServices.updateTryOnSession(session_id, updateData);
-        console.log(`✅ Updated session ${session_id} with status ${status}`);
+      } else {
+        updateData.status = 'failed';
+        updateData.error_message = 'Job completed but no result image URL provided';
       }
+
+      updateData.completed_at = new Date().toISOString();
+
+    } else if (status === 'failed' || status === 'error') {
+      updateData.status = 'failed';
+      updateData.error_message = error_message || 'Job failed with unknown error';
+
+    } else {
+      // Processing or other status
+      updateData.status = status === 'processing' ? 'processing' : 'queued';
+    }
+
+    // Update session in database
+    if (supabaseServices && supabaseServices.updateTryOnSession) {
+      await supabaseServices.updateTryOnSession(sessionId, updateData);
+      console.log(`✅ Updated session ${sessionId} with status: ${updateData.status}`);
+    } else {
+      console.error('❌ Supabase service not available');
+      return res.status(503).json({
+        success: false,
+        message: 'Database service not available'
+      });
     }
 
     res.status(200).json({
       success: true,
       message: 'Webhook processed successfully',
       processed_at: new Date().toISOString(),
-      session_id
+      session_id: sessionId,
+      status: updateData.status
     });
   } catch (error) {
-    console.error('Failed to process webhook:', error);
+    console.error('❌ Failed to process webhook:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to process webhook',
